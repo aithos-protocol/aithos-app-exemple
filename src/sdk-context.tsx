@@ -10,6 +10,37 @@
 // async auth methods and force a re-render after each call. That
 // pattern is acceptable for a demo app — a real app might keep its
 // own thin reactive layer over AithosAuth.
+//
+// ┌─ Local-dev caveats ─────────────────────────────────────────────┐
+// │ Two of the four entry doors hit infrastructure that today does │
+// │ not allow arbitrary origins:                                   │
+// │                                                                 │
+// │  1. Email + password (signUp / signIn) → POSTs to              │
+// │     auth.aithos.be. The browser sends a CORS preflight; the    │
+// │     auth Lambda must include this origin in its CORS allowlist │
+// │     or the call fails before it even leaves localhost.         │
+// │                                                                 │
+// │  2. Google SSO → after the OAuth round-trip, auth.aithos.be    │
+// │     redirects the user to a hard-coded post-callback URL       │
+// │     (currently app.aithos.be). Localhost won't see the         │
+// │     aithos_code.                                               │
+// │                                                                 │
+// │ The two paths that work locally without backend changes:       │
+// │  - signInWithRecovery({ file })  — purely local                │
+// │  - importMandate({ bundle })     — purely local                │
+// │                                                                 │
+// │ Once an owner signer is loaded by either path, the rest        │
+// │ (sdk.ethos / sdk.mandates / sdk.wallet / sdk.compute) goes     │
+// │ through envelope-signed POSTs. Those endpoints (compute and    │
+// │ wallet) likely have their own CORS allowlists too — the same   │
+// │ caveat applies.                                                │
+// │                                                                 │
+// │ Productisation TODOs (tracked in README):                      │
+// │  - SDK: add `returnTo` to signInWithGoogle so the consumer app │
+// │    declares its callback URL explicitly                        │
+// │  - Backend: per-appDid origin registry (CORS + post-Google     │
+// │    redirect allowlist) instead of static config                │
+// └─────────────────────────────────────────────────────────────────┘
 
 import {
   AithosAuth,

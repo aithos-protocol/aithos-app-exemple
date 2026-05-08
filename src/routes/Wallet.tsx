@@ -24,7 +24,7 @@ export function Wallet() {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    if (!state.canSignAsOwner || !state.session) return;
+    if (!state.canSignAsOwner) return;
     let cancelled = false;
     setBusy(true);
     setError(null);
@@ -44,7 +44,7 @@ export function Wallet() {
     return () => {
       cancelled = true;
     };
-  }, [sdk, state.canSignAsOwner, state.session, tick]);
+  }, [sdk, state.canSignAsOwner, tick]);
 
   if (!state.canSignAsOwner) {
     return (
@@ -54,18 +54,11 @@ export function Wallet() {
       </section>
     );
   }
-  if (!state.session) {
-    return (
-      <section>
-        <h2>Wallet</h2>
-        <p className="lede">
-          Wallet calls require a JWT-backed session (email/password or
-          Google sign-in). The recovery / mandate flows don't yield one;
-          please sign in via password or Google to use the wallet.
-        </p>
-      </section>
-    );
-  }
+  // Note: wallet calls don't require a JWT — `getBalance` is gated by
+  // a §11 Ed25519 envelope signed with the owner's `#public` key, and
+  // `createTopupSession` only needs the user DID. Recovery-only and
+  // mandate-only sessions therefore work fine here once an owner
+  // signer is loaded.
 
   return (
     <>
