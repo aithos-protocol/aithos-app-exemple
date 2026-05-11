@@ -294,11 +294,14 @@ export function BrandedRobot() {
             </figure>
             <figure style={{ margin: 0 }}>
               <figcaption style={figcapStyle}>
-                Silhouette + torso target ({step1Result.torsoSource})
+                Pose + torso target ({step1Result.torsoSource}
+                {step1Result.pose &&
+                  ` — hipsVisible=${step1Result.pose.hipsVisible}`}
+                )
               </figcaption>
               <img
                 src={step1Result.debugOverlayDataUri}
-                alt="silhouette debug"
+                alt="pose debug"
                 style={imgStyle}
               />
             </figure>

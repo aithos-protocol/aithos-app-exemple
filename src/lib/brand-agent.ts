@@ -29,6 +29,11 @@ import {
   type CompositeLogoOpts,
   type SilhouetteBox,
 } from "./image-pipeline.js";
+import {
+  detectTorsoByPose,
+  renderPoseOverlay,
+  type PoseTorsoResult,
+} from "./pose-detection.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Color helpers                                                             */
@@ -61,38 +66,23 @@ export function pickBlendMode(brand: BrandProfile): "multiply" | "screen" {
 
 /**
  * Translate a brand profile into a FLUX prompt that produces a
- * SMOOTH FLAT 2D BRAND MASCOT — clean isometric-illustration style
- * with a visible blank chest plate where the agent will paint the
- * logo. Style reference: Aithos Builder mascot — friendly, modern,
+ * SMOOTH FLAT 2D BRAND MASCOT — clean isometric-illustration style,
+ * uniform body with NO chest plate / panel / emblem area. The logo
+ * is composited afterwards using pose-based torso detection, so the
+ * prompt no longer needs to coax FLUX into leaving a coloured zone
+ * on the chest (which kept producing structural panels with bolts).
+ *
+ * Style reference: Aithos Builder mascot — friendly, modern,
  * vector-clean, NOT photorealistic, NOT industrial.
- *
- * Key insights from iteration:
- *
- * - "Flat 2D cartoon illustration / isometric character art" is the
- *   sweet spot. Words like "metal construction" send FLUX into
- *   photorealistic territory; "flat / illustration / vector" keeps
- *   it in mascot territory.
- *
- * - "BUST PORTRAIT" cropping gives a tight head-and-chest frame —
- *   essentially the brand-profile shape. Full-body shots waste
- *   half the canvas on legs and place the chest too high.
- *
- * - The chest plate colour is the LIGHTER of primary/secondary so
- *   the logo (in the darker brand colour) has contrast.
- *
- * - Coloured background with a soft halo behind the robot reads as
- *   "modern brand mascot" rather than "cut-out sticker".
- *
- * - Brand mood / visual brief comes LAST, as flavour — never first.
  */
 export function composeFluxPrompt(brand: BrandProfile): string {
-  const chestColor = pickTorsoColor(brand);
-  const bodyColor =
-    chestColor === brand.primaryColor ? brand.secondaryColor : brand.primaryColor;
+  const bodyColor = pickTorsoColor(brand); // the lighter of primary/secondary
+  const accentColor =
+    bodyColor === brand.primaryColor ? brand.secondaryColor : brand.primaryColor;
   const bgRgb = hexToRgb(brand.backgroundColor);
-  const chestRgb = hexToRgb(chestColor);
-  const chestQualifier = colorQualifier(chestColor);
+  const bodyRgb = hexToRgb(bodyColor);
   const bodyQualifier = colorQualifier(bodyColor);
+  const accentQualifier = colorQualifier(accentColor);
   const keywords = brand.styleKeywords.join(", ");
   return [
     // 1. SCENE — framing first, style second
@@ -103,16 +93,16 @@ export function composeFluxPrompt(brand: BrandProfile): string {
     "NOT photorealistic, NOT 3D rendered, NOT industrial steampunk, NOT metallic photoreal —",
     "just clean flat 2D illustration with subtle soft shading.",
     "Looking straight forward.",
-    // 3. CHEST PLATE — the logo drop zone, leads the description
-    `The robot has a clearly visible large centered chest plate area on its torso —`,
-    `a smooth flat panel of ${chestQualifier} ${chestColor} (color rgb(${chestRgb.r},${chestRgb.g},${chestRgb.b})),`,
-    "perfectly empty, completely blank: no buttons, no gauges, no symbols, no logo,",
-    "no circle, no emblem, no decoration. Like a brand mascot's emblem spot, intentionally left clean.",
-    // 4. OTHER BODY PARTS — subordinate
-    `Body in flat ${chestQualifier} ${chestColor} smooth shapes; headphones and joint details in ${bodyQualifier} ${bodyColor}.`,
+    // 3. BODY — uniform, smooth, no structural details on the chest
+    `The robot body is rendered in flat ${bodyQualifier} ${bodyColor} (color rgb(${bodyRgb.r},${bodyRgb.g},${bodyRgb.b})),`,
+    "smooth uniform surface, single piece — NO chest plate, NO panel, NO bolts, NO rivets,",
+    "NO seams, NO buttons, NO gauges, NO chest emblem, NO circle on the chest, NO decoration.",
+    "The torso is a CLEAN UNINTERRUPTED smooth surface, like a featureless mascot body.",
+    // 4. ACCENTS — headphones, joints, eyes (the only allowed visual interest)
+    `Headphones, eye sockets, and joint accents in ${accentQualifier} ${accentColor}.`,
     // 5. BACKGROUND — colored + halo (kept in the final output)
     `On a flat solid ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}),`,
-    `with a soft warm ambient halo glow behind the robot — atmospheric, modern brand-mascot framing.`,
+    "with a soft warm ambient halo glow behind the robot — atmospheric, modern brand-mascot framing.",
     // 6. MOOD (last, as flavour)
     `Mood: ${keywords}. ${brand.visualBrief}`,
     // 7. STYLE FINISH
@@ -169,10 +159,16 @@ export interface Step1Result {
   readonly silhouetteCanvas: HTMLCanvasElement;
   /** Silhouette bounding box. */
   readonly bbox: SilhouetteBox;
-  /** Detected chest plate geometry — center + suggested logo diameter. */
+  /** Detected torso geometry — center + suggested logo diameter. */
   readonly torso: { centerX: number; centerY: number; diameter: number };
   /** Which detection strategy chose the final position. */
-  readonly torsoSource: "color-match" | "silhouette-width" | "bbox-heuristic";
+  readonly torsoSource:
+    | "pose-landmarker"
+    | "color-match"
+    | "silhouette-width"
+    | "bbox-heuristic";
+  /** Full pose result if MediaPipe ran successfully (for the debug overlay). */
+  readonly pose: PoseTorsoResult | null;
   /** Debug overlay (chest plate bbox + crosshair) painted on the raw image. */
   readonly debugOverlayDataUri: string;
   /** Microcredits debited from the wallet. */
@@ -209,59 +205,88 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
   const sampledBgHex = sampleCornerColor(silhouetteCanvas);
   removeSolidBackground(silhouetteCanvas, sampledBgHex, 38);
 
-  // Chest plate detection — multi-strategy with sanity checks.
+  // Torso detection — 4-tier cascade:
   //
-  // Order:
-  //   1. Colour-match RESTRICTED TO THE CHEST BAND, returning the
-  //      BBOX CENTRE of matched pixels (not centroid — centroid is
-  //      density-biased; the geometric centre is the true visual
-  //      centre of the chest plate).
-  //   2. Silhouette-width fallback.
-  //   3. Plain bbox-65% as last-resort.
+  //   1. MediaPipe Pose (preferred)
+  //      Pose-landmark detection on the RAW canvas. Uses shoulders +
+  //      hips (or shoulders alone with anatomical offset if hips are
+  //      cropped out, typical in bust-portrait frames).
   //
-  // Diameter from colour-match = ~50% of the chest plate's SMALLER
-  // dimension, giving the logo a healthy margin inside the plate.
+  //   2. Colour-match on the silhouette (legacy)
+  //   3. Silhouette-width (legacy)
+  //   4. Bbox heuristic (last resort)
+  //
+  // The pose path needs the raw FLUX image (with bg) — MediaPipe was
+  // trained on natural photos with backgrounds, and the silhouette
+  // (transparent everywhere except the robot) can confuse it.
   const torsoColor = pickTorsoColor(brand);
   const bbox = detectSilhouetteBox(silhouetteCanvas);
-  const chestYMin = bbox.top + Math.floor(bbox.height * 0.50);
-  const chestYMax = bbox.top + Math.floor(bbox.height * 0.90);
+  const chestYMin = bbox.top + Math.floor(bbox.height * 0.45);
+  const chestYMax = bbox.top + Math.floor(bbox.height * 0.95);
   const isInChestBand = (cy: number): boolean => cy >= chestYMin && cy <= chestYMax;
 
   let torso: { centerX: number; centerY: number; diameter: number };
-  let torsoSource: "color-match" | "silhouette-width" | "bbox-heuristic";
+  let torsoSource:
+    | "pose-landmarker"
+    | "color-match"
+    | "silhouette-width"
+    | "bbox-heuristic";
+  let pose: PoseTorsoResult | null = null;
 
-  const colorMatched = detectTorsoByColor(silhouetteCanvas, torsoColor, {
-    tolerance: 50,
-    yMin: chestYMin,
-    yMax: chestYMax,
-    minPixels: 5000,
-  });
-  if (colorMatched && isInChestBand(colorMatched.centerY)) {
+  // 1. MediaPipe — try first
+  try {
+    pose = await detectTorsoByPose(rawCanvas);
+  } catch (e) {
+    // Model load failed, or detect threw — log and fall through
+    console.warn("[brand-agent] pose detection failed, falling back", e);
+    pose = null;
+  }
+  if (pose && isInChestBand(pose.centerY)) {
     torso = {
-      centerX: colorMatched.centerX,
-      centerY: colorMatched.centerY,
-      diameter: colorMatched.diameter,
+      centerX: pose.centerX,
+      centerY: pose.centerY,
+      diameter: pose.diameter,
     };
-    torsoSource = "color-match";
+    torsoSource = "pose-landmarker";
   } else {
-    const widthBased = detectTorsoBySilhouetteWidth(silhouetteCanvas, bbox);
-    if (isInChestBand(widthBased.centerY)) {
-      torso = widthBased;
-      torsoSource = "silhouette-width";
-    } else {
+    // 2-3-4: legacy cascade
+    const colorMatched = detectTorsoByColor(silhouetteCanvas, torsoColor, {
+      tolerance: 50,
+      yMin: chestYMin,
+      yMax: chestYMax,
+      minPixels: 5000,
+    });
+    if (colorMatched && isInChestBand(colorMatched.centerY)) {
       torso = {
-        centerX: Math.round(bbox.left + bbox.width / 2),
-        centerY: Math.round(bbox.top + bbox.height * 0.65),
-        diameter: Math.round(bbox.width * 0.38),
+        centerX: colorMatched.centerX,
+        centerY: colorMatched.centerY,
+        diameter: colorMatched.diameter,
       };
-      torsoSource = "bbox-heuristic";
+      torsoSource = "color-match";
+    } else {
+      const widthBased = detectTorsoBySilhouetteWidth(silhouetteCanvas, bbox);
+      if (isInChestBand(widthBased.centerY)) {
+        torso = widthBased;
+        torsoSource = "silhouette-width";
+      } else {
+        torso = {
+          centerX: Math.round(bbox.left + bbox.width / 2),
+          centerY: Math.round(bbox.top + bbox.height * 0.65),
+          diameter: Math.round(bbox.width * 0.38),
+        };
+        torsoSource = "bbox-heuristic";
+      }
     }
   }
 
-  // Debug overlay drawn over the RAW canvas (with bg intact) so the
-  // user sees the marker on the actual final-output background, not
-  // on a checkered void.
-  const debugOverlay = renderTorsoDebugOverlay(rawCanvas, bbox, torso);
+  // Debug overlay — when pose detection succeeded, show the full
+  // skeleton so the user can validate WHICH joints MediaPipe found
+  // and how the torso was inferred. Otherwise fall back to the
+  // bbox-only overlay.
+  const debugOverlay =
+    pose !== null
+      ? renderPoseOverlay(rawCanvas, pose, { logoTarget: torso })
+      : renderTorsoDebugOverlay(rawCanvas, bbox, torso);
   const debugOverlayDataUri = canvasToDataUri(debugOverlay);
 
   return {
@@ -273,6 +298,7 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
     bbox,
     torso,
     torsoSource,
+    pose,
     debugOverlayDataUri,
     creditsSpent: r.creditsCharged,
   };
