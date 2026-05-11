@@ -20,7 +20,7 @@ import {
   compositeLogoOnRobot,
   detectSilhouetteBox,
   detectTorsoByColor,
-  estimateTorsoCenter,
+  detectTorsoBySilhouetteWidth,
   hexToRgb,
   imageToCanvas,
   loadImage,
@@ -60,33 +60,69 @@ export function pickBlendMode(brand: BrandProfile): "multiply" | "screen" {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The v3 prompt — "wearing a blank t-shirt" — is the formulation that
- * actually produces a flat featureless torso panel in our tests.
- * FLUX is much better at "wearing X" descriptions than at negative
- * "no Y" instructions. The t-shirt becomes a clean canvas the
- * compositor can land the logo on.
+ * Translate a brand profile into a FLUX prompt.
  *
- * The t-shirt color is the LIGHTER of primary/secondary so the
- * logo (in the darker brand colour) has contrast.
+ * Key insights from iteration:
+ *
+ * - "Wearing X" descriptions stick FAR better than "no chest emblem"
+ *   negations. FLUX honours positive descriptions; negative ones are
+ *   often ignored.
+ *
+ * - The colour spec for the t-shirt has to LEAD the prompt and use
+ *   a strong qualifier ("pristine pure-white", "rich deep brown"),
+ *   otherwise the model uses the brand's mood words ("cool",
+ *   "technical", "warm") to dictate the body palette and overrides
+ *   the requested colour.
+ *
+ * - The t-shirt colour is the LIGHTER of primary/secondary so the
+ *   logo (in the darker brand colour) lands with contrast.
+ *
+ * - Brand mood / visual brief comes LAST, as flavour — never first.
+ *
+ * - Background colour also gets the "uniform flat solid" treatment
+ *   so the client-side flood-fill removes it cleanly.
  */
 export function composeFluxPrompt(brand: BrandProfile): string {
   const torsoColor = pickTorsoColor(brand);
   const otherColor =
     torsoColor === brand.primaryColor ? brand.secondaryColor : brand.primaryColor;
-  const keywords = brand.styleKeywords.join(", ");
   const bgRgb = hexToRgb(brand.backgroundColor);
   const tsRgb = hexToRgb(torsoColor);
+  const tsQualifier = colorQualifier(torsoColor);
+  const keywords = brand.styleKeywords.join(", ");
   return [
-    "A friendly minimal robot character mascot",
-    `wearing a smooth featureless plain blank ${torsoColor} t-shirt over its chest (fabric rgb(${tsRgb.r},${tsRgb.g},${tsRgb.b})),`,
-    "upper body portrait, simple flat modern cartoon style, looking straight forward,",
-    `body parts in ${otherColor} metal tones,`,
-    `${keywords} feel.`,
-    brand.visualBrief,
-    "The t-shirt fabric is completely empty — no logos, no text, no patterns, no buttons, no graphics, perfectly plain solid colour.",
-    `On a flat pure solid uniform ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}).`,
-    "Sharp silhouette, clean edges.",
+    // 1. SCENE
+    "A friendly minimal robot character mascot, upper body portrait,",
+    "simple flat modern cartoon style, looking straight forward.",
+    // 2. T-SHIRT (the most important visual contract — leads here)
+    `Wearing a ${tsQualifier} ${torsoColor} t-shirt over its chest —`,
+    `the t-shirt fabric is unmistakably ${tsQualifier} ${torsoColor}, color rgb(${tsRgb.r},${tsRgb.g},${tsRgb.b}),`,
+    "completely flat, perfectly smooth, perfectly empty —",
+    "no logos, no text, no patterns, no buttons, no graphics, no decorations, no seams visible.",
+    // 3. BODY PARTS (subordinate to the t-shirt)
+    `Robot head, arms and hands in ${otherColor} matte metal tones, simple and minimal.`,
+    // 4. MOOD (comes last)
+    `Overall mood: ${keywords}. ${brand.visualBrief}`,
+    // 5. BACKGROUND
+    `On a flat pure solid uniform ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}),`,
+    "no gradients, no patterns, no shadow falloff, perfectly uniform colour edge-to-edge.",
+    // 6. STYLE FINISH
+    "Sharp clean silhouette, no glow effects, no lens flares, no rim light, no bright specular highlights.",
   ].join(" ");
+}
+
+/**
+ * Pick an English qualifier that nudges FLUX towards the exact colour
+ * we asked for. Without this, the model's interpretation drifts — a
+ * "white" t-shirt becomes greyish, a "brown" becomes nearly black.
+ */
+function colorQualifier(hex: string): string {
+  const { r, g, b } = hexToRgb(hex);
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (luma > 0.85) return "pristine bright pure";
+  if (luma > 0.60) return "soft warm clean";
+  if (luma > 0.35) return "rich vivid saturated";
+  return "deep rich dark";
 }
 
 /* -------------------------------------------------------------------------- */
@@ -115,8 +151,8 @@ export interface Step1Result {
   readonly bbox: SilhouetteBox;
   /** Detected torso geometry. */
   readonly torso: { centerX: number; centerY: number; diameter: number };
-  /** Was the torso detected via colour matching (preferred) or bbox fallback? */
-  readonly torsoSource: "color-match" | "bbox-heuristic";
+  /** Which detection strategy chose the final torso position. */
+  readonly torsoSource: "color-match" | "silhouette-width" | "bbox-heuristic";
   /** Debug overlay (silhouette bbox + torso crosshair) for the UI. */
   readonly debugOverlayDataUri: string;
   /** Microcredits debited from the wallet. */
@@ -146,13 +182,37 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
   const robotCanvas = imageToCanvas(rawImgEl);
   removeSolidBackground(robotCanvas, brand.backgroundColor, 38);
 
-  // Torso detection — colour-match first, fall back to bbox heuristic
+  // Torso detection — multi-strategy with sanity checks.
+  //
+  // Order:
+  //   1. Colour-match RESTRICTED TO LOWER HALF of the silhouette (so
+  //      head highlights — antenna tips, lens flares, edge specular —
+  //      can't be confused for the t-shirt). When FLUX honoured the
+  //      requested torso colour, this gives the tightest centre.
+  //   2. Silhouette-width fallback: find the widest row in the lower
+  //      65% of the silhouette. Provider-agnostic — works even if
+  //      FLUX painted the t-shirt the wrong colour.
+  //   3. Plain bbox-58% as the last-resort fallback.
+  //
+  // After each candidate we sanity-check that the centerY sits inside
+  // the chest band (35-90% of the bbox height). Reject and try the
+  // next strategy if not.
   const torsoColor = pickTorsoColor(brand);
   const bbox = detectSilhouetteBox(robotCanvas);
-  const colorMatched = detectTorsoByColor(robotCanvas, torsoColor, 50);
+  const chestYMin = bbox.top + Math.floor(bbox.height * 0.35);
+  const chestYMax = bbox.top + Math.floor(bbox.height * 0.90);
+  const isInChestBand = (cy: number): boolean => cy >= chestYMin && cy <= chestYMax;
+
   let torso: { centerX: number; centerY: number; diameter: number };
-  let torsoSource: "color-match" | "bbox-heuristic";
-  if (colorMatched && colorMatched.pixelCount > 5000) {
+  let torsoSource: "color-match" | "silhouette-width" | "bbox-heuristic";
+
+  const colorMatched = detectTorsoByColor(robotCanvas, torsoColor, {
+    tolerance: 50,
+    yMin: chestYMin,
+    yMax: chestYMax,
+    minPixels: 5000,
+  });
+  if (colorMatched && isInChestBand(colorMatched.centerY)) {
     torso = {
       centerX: colorMatched.centerX,
       centerY: colorMatched.centerY,
@@ -160,8 +220,18 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
     };
     torsoSource = "color-match";
   } else {
-    torso = estimateTorsoCenter(bbox, 0.55);
-    torsoSource = "bbox-heuristic";
+    const widthBased = detectTorsoBySilhouetteWidth(robotCanvas, bbox);
+    if (isInChestBand(widthBased.centerY)) {
+      torso = widthBased;
+      torsoSource = "silhouette-width";
+    } else {
+      torso = {
+        centerX: Math.round(bbox.left + bbox.width / 2),
+        centerY: Math.round(bbox.top + bbox.height * 0.58),
+        diameter: Math.round(bbox.width * 0.38),
+      };
+      torsoSource = "bbox-heuristic";
+    }
   }
 
   const robotDataUri = canvasToDataUri(robotCanvas);

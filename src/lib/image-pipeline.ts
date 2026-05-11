@@ -263,21 +263,36 @@ export function estimateTorsoCenter(
 export function detectTorsoByColor(
   canvas: HTMLCanvasElement,
   torsoHex: string,
-  tolerance = 32,
+  opts: {
+    readonly tolerance?: number;
+    /**
+     * Search only within these y bounds. CRITICAL for accuracy: if
+     * left unset, the head's bright highlights (lens flares, antenna
+     * tips, edge specular) can be brighter than the torso area and
+     * skew the centroid up to the head. Callers should pass the
+     * lower half of the silhouette bbox here.
+     */
+    readonly yMin?: number;
+    readonly yMax?: number;
+    /** Min pixel count to consider the detection trustworthy. */
+    readonly minPixels?: number;
+  } = {},
 ): { centerX: number; centerY: number; diameter: number; pixelCount: number } | null {
+  const tolerance = opts.tolerance ?? 32;
+  const minPixels = opts.minPixels ?? 200;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
   const { width: w, height: h } = canvas;
   const { data } = ctx.getImageData(0, 0, w, h);
   const ref = hexToRgb(torsoHex);
   const tol2 = tolerance * tolerance;
-  // Collect matching coordinates in the central 60% horizontally
-  // (avoids picking up arms/legs that happen to share the torso color)
   const xMin = Math.floor(w * 0.20);
   const xMax = Math.ceil(w * 0.80);
+  const yMin = Math.max(0, Math.floor(opts.yMin ?? 0));
+  const yMax = Math.min(h, Math.ceil(opts.yMax ?? h));
   const xs: number[] = [];
   const ys: number[] = [];
-  for (let y = 0; y < h; y++) {
+  for (let y = yMin; y < yMax; y++) {
     for (let x = xMin; x < xMax; x++) {
       const i = (y * w + x) * 4;
       if (data[i + 3]! < 200) continue; // not opaque
@@ -289,7 +304,7 @@ export function detectTorsoByColor(
       ys.push(y);
     }
   }
-  if (xs.length < 200) return null;
+  if (xs.length < minPixels) return null;
   // Centroid
   let sx = 0;
   let sy = 0;
@@ -315,6 +330,63 @@ export function detectTorsoByColor(
     centerY: Math.round(cy),
     diameter,
     pixelCount: xs.length,
+  };
+}
+
+/**
+ * Detect the torso center by scanning silhouette WIDTH per row.
+ *
+ * In the lower half of the silhouette, the row with the maximum
+ * horizontal extent is overwhelmingly the chest (a t-shirt is the
+ * widest visible body part). This is provider-agnostic — works even
+ * if FLUX painted the t-shirt the wrong colour.
+ *
+ * Algorithm:
+ *   1. For each row in the lower 65% of the bbox, find the leftmost
+ *      and rightmost opaque pixels.
+ *   2. Compute width = right - left for each row.
+ *   3. Pick the row with max width as the torso center y.
+ *   4. centerX = (left + right) / 2 at that row.
+ *   5. diameter = ~70% of that max width (the disc fits inside the
+ *      torso, not its full width which includes arms-meeting-body).
+ */
+export function detectTorsoBySilhouetteWidth(
+  canvas: HTMLCanvasElement,
+  bbox: SilhouetteBox,
+  alphaThreshold = 200,
+): { centerX: number; centerY: number; diameter: number } {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+  const { data, width: w } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  // Search the lower 65% of the silhouette only (skip the head zone).
+  const yStart = bbox.top + Math.floor(bbox.height * 0.35);
+  const yEnd = bbox.top + Math.floor(bbox.height * 0.95);
+  let bestY = yStart;
+  let bestWidth = -1;
+  let bestLeft = bbox.left;
+  let bestRight = bbox.right;
+  for (let y = yStart; y < yEnd; y++) {
+    let left = -1;
+    let right = -1;
+    for (let x = bbox.left; x <= bbox.right; x++) {
+      if (data[(y * w + x) * 4 + 3]! >= alphaThreshold) {
+        if (left === -1) left = x;
+        right = x;
+      }
+    }
+    if (left === -1) continue;
+    const width = right - left;
+    if (width > bestWidth) {
+      bestWidth = width;
+      bestY = y;
+      bestLeft = left;
+      bestRight = right;
+    }
+  }
+  return {
+    centerX: Math.round((bestLeft + bestRight) / 2),
+    centerY: bestY,
+    diameter: Math.max(40, Math.round(bestWidth * 0.7)),
   };
 }
 
