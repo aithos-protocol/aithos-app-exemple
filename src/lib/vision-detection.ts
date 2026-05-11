@@ -34,27 +34,32 @@ export interface VisionTorsoResult {
 
 const PROMPT_TEMPLATE = (w: number, h: number) =>
   [
-    "You are a precise vision assistant locating the optimal logo placement on a brand mascot.",
+    "You are a brand-mascot graphic designer placing a CIRCULAR brand emblem on a robot mascot's chest.",
+    'Think "Iron Man arc-reactor" — the logo goes dead-center on the visible chest panel, like a bold emblem on a uniform.',
     "",
-    `Image dimensions: ${w}×${h} pixels.`,
-    "Source pixel coordinate system: (0,0) at TOP-LEFT, x→right, y→down.",
+    `Image dimensions: ${w}×${h} pixels. Coordinate origin: TOP-LEFT, x→right, y→down.`,
     "",
-    "Task — locate the VISUAL center of the mascot's chest area (where a graphic designer would naturally place a brand logo). Account for perspective if the figure is turned (the visual center may differ from the silhouette's geometric center). Then compute the maximum logo dimensions that fit inside the chest area with AT LEAST 15% margin on all sides.",
+    "Reason through these steps SILENTLY, then output JSON:",
     "",
-    "Return ONLY valid JSON, no markdown fences, no commentary before or after. Exactly this shape:",
+    "1. Locate the BOTTOM of the visible neck/collar — call this y_neckBottom.",
+    "2. Locate the BOTTOM of the visible torso (or the frame edge if cropped) — call this y_torsoBottom.",
+    "3. Logo y = y_neckBottom + 0.55 × (y_torsoBottom - y_neckBottom).",
+    "   (Lower than \"chest center\" sounds — this lands on the mid-pec, where uniform logos and arc-reactors actually sit.)",
+    "4. Identify the VISIBLE CHEST SURFACE — if the mascot is turned 3/4, this is the largest continuous chest area facing the viewer, NOT the silhouette midpoint.",
+    "5. Logo x = horizontal midpoint of that visible chest surface.",
+    "6. Estimate the visible chest width at logo y — call this chest_w.",
+    "7. Logo diameter = round(chest_w × 0.50). The diameter already accounts for ~25% margin on each side.",
+    "",
+    "Output ONLY this JSON, no markdown fences, no commentary before or after:",
     "",
     "{",
-    '  "chestCenter": { "x": <int>, "y": <int> },',
-    '  "maxLogoWidth": <int>,',
-    '  "maxLogoHeight": <int>,',
+    '  "logoCenter": { "x": <int>, "y": <int> },',
+    '  "logoDiameter": <int>,',
     '  "confidence": <0.0..1.0>,',
-    '  "notes": "<one short sentence describing the placement>"',
+    '  "reasoning": "<one short sentence summarizing the placement>"',
     "}",
     "",
-    "Constraints:",
-    "- x, y are absolute pixel coordinates in the source image.",
-    "- maxLogoWidth and maxLogoHeight are the MAX sizes for the logo, with 15% margin INSIDE the chest already accounted for.",
-    "- If you cannot identify a chest with confidence > 0.6, return all numeric fields as 0 and explain in notes.",
+    "If you cannot identify a chest with confidence > 0.6, return all numeric fields as 0 and explain in reasoning.",
   ].join("\n");
 
 /**
@@ -110,7 +115,14 @@ export async function detectTorsoByVision(
   };
 }
 
-/** Permissive JSON extractor — strips markdown fences, finds the first { ... } block. */
+/**
+ * Permissive JSON extractor accepting BOTH:
+ *   - v11.1 shape: { logoCenter: {x,y}, logoDiameter, confidence, reasoning }
+ *   - v11.0 shape: { chestCenter: {x,y}, maxLogoWidth, maxLogoHeight, confidence, notes }
+ *
+ * Normalises to the internal representation used by the caller. For
+ * the v11.1 circular-logo path, maxLogoWidth = maxLogoHeight = diameter.
+ */
 function parseSonnetJson(content: string): {
   chestCenter: { x: number; y: number };
   maxLogoWidth: number;
@@ -142,20 +154,51 @@ function parseSonnetJson(content: string): {
     throw new Error("Sonnet vision JSON is not an object");
   }
   const r = obj as Record<string, unknown>;
+
+  // v11.1 shape — preferred
+  const lc = r.logoCenter as Record<string, unknown> | undefined;
+  if (
+    lc &&
+    typeof lc.x === "number" &&
+    typeof lc.y === "number" &&
+    typeof r.logoDiameter === "number"
+  ) {
+    const d = Math.round(r.logoDiameter);
+    return {
+      chestCenter: { x: Math.round(lc.x), y: Math.round(lc.y) },
+      maxLogoWidth: d,
+      maxLogoHeight: d,
+      confidence: typeof r.confidence === "number" ? r.confidence : 0,
+      notes:
+        typeof r.reasoning === "string"
+          ? r.reasoning
+          : typeof r.notes === "string"
+            ? r.notes
+            : "",
+    };
+  }
+
+  // v11.0 legacy shape — fallback
   const cc = r.chestCenter as Record<string, unknown> | undefined;
-  if (!cc || typeof cc.x !== "number" || typeof cc.y !== "number") {
-    throw new Error("missing or invalid chestCenter.x/y in Sonnet JSON");
+  if (
+    cc &&
+    typeof cc.x === "number" &&
+    typeof cc.y === "number" &&
+    typeof r.maxLogoWidth === "number" &&
+    typeof r.maxLogoHeight === "number"
+  ) {
+    return {
+      chestCenter: { x: Math.round(cc.x), y: Math.round(cc.y) },
+      maxLogoWidth: Math.round(r.maxLogoWidth),
+      maxLogoHeight: Math.round(r.maxLogoHeight),
+      confidence: typeof r.confidence === "number" ? r.confidence : 0,
+      notes: typeof r.notes === "string" ? r.notes : "",
+    };
   }
-  if (typeof r.maxLogoWidth !== "number" || typeof r.maxLogoHeight !== "number") {
-    throw new Error("missing or invalid maxLogoWidth/Height in Sonnet JSON");
-  }
-  return {
-    chestCenter: { x: Math.round(cc.x), y: Math.round(cc.y) },
-    maxLogoWidth: Math.round(r.maxLogoWidth),
-    maxLogoHeight: Math.round(r.maxLogoHeight),
-    confidence: typeof r.confidence === "number" ? r.confidence : 0,
-    notes: typeof r.notes === "string" ? r.notes : "",
-  };
+
+  throw new Error(
+    `Sonnet vision JSON missing required fields. Got: ${JSON.stringify(r).slice(0, 200)}`,
+  );
 }
 
 async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
