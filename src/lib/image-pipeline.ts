@@ -176,6 +176,65 @@ function featherAlpha(imgData: ImageData): void {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Logo recoloration — solid-colour silhouette + colour distance             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Euclidean RGB distance between two `#rrggbb` colours. Result range:
+ * 0 (identical) .. ~441 (white vs black). Used to decide whether the
+ * brand's primary colour is too close to the surface where the logo
+ * will be placed (in which case we auto-swap to the secondary).
+ */
+export function colorDistance(hexA: string, hexB: string): number {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+/**
+ * Recolour an image-with-alpha into a flat monochrome silhouette.
+ *
+ * The source's alpha channel is preserved AS-IS — anti-aliased edges
+ * stay smooth, transparent background stays transparent. Every visible
+ * pixel's RGB is replaced by `targetHex`.
+ *
+ * Use case: branded-mascot pipeline — the brand's logo (which may have
+ * multiple colours) is flattened to a single solid colour drawn from
+ * the brand palette, so it reads cleanly against the robot's chest at
+ * small sizes and with no visual competition between the logo's own
+ * colour scheme and the brand's primary colour.
+ */
+export function recolorLogoToSilhouette(
+  src: HTMLImageElement | HTMLCanvasElement,
+  targetHex: string,
+): HTMLCanvasElement {
+  const w = src instanceof HTMLCanvasElement ? src.width : src.naturalWidth;
+  const h = src instanceof HTMLCanvasElement ? src.height : src.naturalHeight;
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+  ctx.drawImage(src, 0, 0);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+  const { r, g, b } = hexToRgb(targetHex);
+  for (let i = 0; i < data.length; i += 4) {
+    // Skip fully transparent pixels — no need to touch them.
+    if (data[i + 3] === 0) continue;
+    data[i] = r;
+    data[i + 1] = g;
+    data[i + 2] = b;
+    // alpha (data[i+3]) preserved
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return out;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Silhouette bounding box detection                                         */
 /* -------------------------------------------------------------------------- */
 

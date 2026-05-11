@@ -24,6 +24,13 @@ export interface VisionTorsoResult {
   readonly centerY: number;
   readonly maxLogoWidth: number;
   readonly maxLogoHeight: number;
+  /**
+   * Dominant surface colour at the logo center, sampled by Sonnet.
+   * Used downstream by step3_5RecolorLogo for auto-contrast — if the
+   * brand's primaryColor is too close to this, we flip to secondaryColor.
+   * Format: `#rrggbb`. Null if Sonnet didn't return it.
+   */
+  readonly chestColorHex: string | null;
   readonly confidence: number;
   readonly notes: string;
   /** Raw assistant content (for debugging). */
@@ -63,17 +70,25 @@ const PROMPT_TEMPLATE = (w: number, h: number) =>
     "6. Estimate the chest width at logo y — call this chest_w.",
     "7. Logo diameter = round(chest_w × 0.55). This has a ~22% visual margin",
     "   built-in around the disc.",
+    "8. SAMPLE the dominant SURFACE COLOUR of the chest panel right at",
+    "   (logo_x, logo_y). Pretend you have a colour picker. Return it as",
+    "   '#rrggbb'. This is the colour of the CHEST itself at that spot —",
+    "   NOT a logo (the chest should be blank), NOT the background,",
+    "   NOT a highlight or shadow tone. If the chest has cel-shaded",
+    "   gradients, pick the dominant mid-tone.",
     "",
     "Output ONLY this JSON, no markdown fences, no commentary before or after:",
     "",
     "{",
     '  "logoCenter": { "x": <int>, "y": <int> },',
     '  "logoDiameter": <int>,',
+    '  "chestColorHex": "<#rrggbb>",',
     '  "confidence": <0.0..1.0>,',
-    '  "reasoning": "<sentence reporting y_neckBottom, y_pecBottom, y_plexus, and final logo y>"',
+    '  "reasoning": "<sentence reporting y_neckBottom, y_pecBottom, y_plexus, final logo y, and the chest colour you sampled>"',
     "}",
     "",
-    "If you cannot identify a chest with confidence > 0.6, return all numeric fields as 0 and explain in reasoning.",
+    "If you cannot identify a chest with confidence > 0.6, return all",
+    "numeric fields as 0, chestColorHex as \"#000000\", and explain in reasoning.",
   ].join("\n");
 
 /**
@@ -122,6 +137,7 @@ export async function detectTorsoByVision(
     centerY: parsed.chestCenter.y,
     maxLogoWidth: parsed.maxLogoWidth,
     maxLogoHeight: parsed.maxLogoHeight,
+    chestColorHex: parsed.chestColorHex,
     confidence: parsed.confidence,
     notes: parsed.notes,
     rawContent: r.content,
@@ -130,17 +146,20 @@ export async function detectTorsoByVision(
 }
 
 /**
- * Permissive JSON extractor accepting BOTH:
- *   - v11.1 shape: { logoCenter: {x,y}, logoDiameter, confidence, reasoning }
- *   - v11.0 shape: { chestCenter: {x,y}, maxLogoWidth, maxLogoHeight, confidence, notes }
+ * Permissive JSON extractor accepting THREE shapes:
+ *   - v13 shape:    { logoCenter, logoDiameter, chestColorHex, confidence, reasoning }
+ *   - v11.1 legacy: { logoCenter, logoDiameter, confidence, reasoning } (no chestColorHex)
+ *   - v11.0 legacy: { chestCenter, maxLogoWidth, maxLogoHeight, confidence, notes }
  *
  * Normalises to the internal representation used by the caller. For
- * the v11.1 circular-logo path, maxLogoWidth = maxLogoHeight = diameter.
+ * the circular-logo paths, maxLogoWidth = maxLogoHeight = diameter.
+ * chestColorHex is `null` when not present (legacy) or malformed.
  */
 function parseSonnetJson(content: string): {
   chestCenter: { x: number; y: number };
   maxLogoWidth: number;
   maxLogoHeight: number;
+  chestColorHex: string | null;
   confidence: number;
   notes: string;
 } {
@@ -169,7 +188,13 @@ function parseSonnetJson(content: string): {
   }
   const r = obj as Record<string, unknown>;
 
-  // v11.1 shape — preferred
+  // Optional chestColorHex (v13+). Validate hex format; null if absent/bad.
+  const rawHex = typeof r.chestColorHex === "string" ? r.chestColorHex : null;
+  const chestColorHex = rawHex && /^#[0-9a-fA-F]{6}$/.test(rawHex)
+    ? rawHex.toLowerCase()
+    : null;
+
+  // v13 / v11.1 shape — { logoCenter, logoDiameter } (chestColorHex optional)
   const lc = r.logoCenter as Record<string, unknown> | undefined;
   if (
     lc &&
@@ -182,6 +207,7 @@ function parseSonnetJson(content: string): {
       chestCenter: { x: Math.round(lc.x), y: Math.round(lc.y) },
       maxLogoWidth: d,
       maxLogoHeight: d,
+      chestColorHex,
       confidence: typeof r.confidence === "number" ? r.confidence : 0,
       notes:
         typeof r.reasoning === "string"
@@ -205,6 +231,7 @@ function parseSonnetJson(content: string): {
       chestCenter: { x: Math.round(cc.x), y: Math.round(cc.y) },
       maxLogoWidth: Math.round(r.maxLogoWidth),
       maxLogoHeight: Math.round(r.maxLogoHeight),
+      chestColorHex,
       confidence: typeof r.confidence === "number" ? r.confidence : 0,
       notes: typeof r.notes === "string" ? r.notes : "",
     };

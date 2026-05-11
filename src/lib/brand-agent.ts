@@ -17,6 +17,7 @@ import {
   blobToDataUri,
   canvasToBlob,
   canvasToDataUri,
+  colorDistance,
   compositeLogoOnRobot,
   detectSilhouetteBox,
   detectTorsoByColor,
@@ -24,6 +25,7 @@ import {
   hexToRgb,
   imageToCanvas,
   loadImage,
+  recolorLogoToSilhouette,
   removeSolidBackground,
   renderTorsoDebugOverlay,
   type CompositeLogoOpts,
@@ -507,6 +509,111 @@ export async function step3PrepareLogo(args: Step3LogoArgs): Promise<Step3LogoRe
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Step 3.5 — Recolor logo to silhouette (auto-contrast)                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Default Euclidean RGB distance threshold below which we consider the
+ * brand's primary colour "too close" to the robot's chest colour at
+ * the logo position — at which point we swap to the secondary colour
+ * to keep the logo legible. Scale is 0..~441 (white-vs-black).
+ *
+ * 80 is the tuned default: distinguishes near-identical hues (eg light
+ * pink on slightly-darker pink) from genuinely contrasting pairs (eg
+ * gold on navy ≈ 270, white on cream ≈ 50).
+ */
+export const DEFAULT_CONTRAST_THRESHOLD = 80;
+
+export interface Step3_5RecolorArgs {
+  readonly brand: BrandProfile;
+  readonly logo: Step3LogoResult;
+  /**
+   * Vision-sampled chest colour at the logo location. When `null`, we
+   * skip auto-contrast and always use primaryColor.
+   */
+  readonly chestColorHex: string | null;
+  /** Override the default contrast threshold. */
+  readonly contrastThreshold?: number;
+}
+
+export interface Step3_5RecolorResult {
+  /** Recoloured logo ready for compositing (always single solid colour). */
+  readonly processedImg: HTMLImageElement;
+  readonly processedDataUri: string;
+  /** Which palette role was actually applied. */
+  readonly colorUsed: "primary" | "secondary";
+  /** Hex value actually painted onto the silhouette. */
+  readonly colorHex: string;
+  /** True if we swapped from primary to secondary due to low contrast. */
+  readonly contrastTriggered: boolean;
+  /** Distance(primary, chestColor). null if chest colour was unavailable. */
+  readonly distanceToPrimary: number | null;
+  /** Distance(secondary, chestColor). null if chest colour was unavailable. */
+  readonly distanceToSecondary: number | null;
+  /** Echo of the threshold used (for debug display). */
+  readonly thresholdUsed: number;
+}
+
+/**
+ * Step 3.5 — Flatten the prepared logo to a monochrome silhouette in
+ * the brand's primary colour, with an auto-contrast fallback that
+ * swaps to the secondary when the primary would clash with the
+ * sampled chest colour.
+ *
+ * Decision logic:
+ *   1. chestColorHex == null  → no contrast info → use primary.
+ *   2. d_primary >= threshold → primary contrasts enough → primary.
+ *   3. d_secondary > d_primary → secondary contrasts better → secondary
+ *      (= "contrast triggered").
+ *   4. Else → secondary no better; stick with primary as the brand-correct choice.
+ */
+export async function step3_5RecolorLogo(
+  args: Step3_5RecolorArgs,
+): Promise<Step3_5RecolorResult> {
+  const { brand, logo, chestColorHex } = args;
+  const threshold = args.contrastThreshold ?? DEFAULT_CONTRAST_THRESHOLD;
+
+  let colorUsed: "primary" | "secondary" = "primary";
+  let colorHex = brand.primaryColor;
+  let contrastTriggered = false;
+  let distanceToPrimary: number | null = null;
+  let distanceToSecondary: number | null = null;
+
+  if (chestColorHex !== null) {
+    distanceToPrimary = colorDistance(brand.primaryColor, chestColorHex);
+    distanceToSecondary = colorDistance(brand.secondaryColor, chestColorHex);
+    if (
+      distanceToPrimary < threshold &&
+      distanceToSecondary > distanceToPrimary
+    ) {
+      colorUsed = "secondary";
+      colorHex = brand.secondaryColor;
+      contrastTriggered = true;
+    }
+  }
+
+  const canvas = recolorLogoToSilhouette(logo.processedImg, colorHex);
+  const processedDataUri = canvasToDataUri(canvas);
+  const processedImg = await loadImage(processedDataUri);
+
+  console.log("[brand-agent] step3_5 recolor:", {
+    chestColorHex, distanceToPrimary, distanceToSecondary,
+    threshold, colorUsed, colorHex, contrastTriggered,
+  });
+
+  return {
+    processedImg,
+    processedDataUri,
+    colorUsed,
+    colorHex,
+    contrastTriggered,
+    distanceToPrimary,
+    distanceToSecondary,
+    thresholdUsed: threshold,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Step 4 — Composite                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -518,7 +625,12 @@ export interface Step4Settings extends CompositeLogoOpts {
 export interface Step4CompositeArgs {
   readonly robot: Step1Result;
   readonly detection: Step2DetectResult;
-  readonly logo: Step3LogoResult;
+  /**
+   * Anything with a `processedImg` — accepts both `Step3LogoResult`
+   * (transparent original logo) and `Step3_5RecolorResult` (silhouette
+   * in brand colour). The v13 pipeline passes the recoloured version.
+   */
+  readonly logo: { readonly processedImg: HTMLImageElement };
   readonly settings: Step4Settings;
 }
 
