@@ -353,14 +353,22 @@ export function detectTorsoByColor(
 export function detectTorsoBySilhouetteWidth(
   canvas: HTMLCanvasElement,
   bbox: SilhouetteBox,
-  alphaThreshold = 200,
+  opts: {
+    readonly alphaThreshold?: number;
+    /** Search start y (defaults to 50% of bbox height — upper-body crops). */
+    readonly yStartRatio?: number;
+    /** Search end y (defaults to 90% of bbox height). */
+    readonly yEndRatio?: number;
+  } = {},
 ): { centerX: number; centerY: number; diameter: number } {
+  const alphaThreshold = opts.alphaThreshold ?? 200;
+  const yStartRatio = opts.yStartRatio ?? 0.50;
+  const yEndRatio = opts.yEndRatio ?? 0.90;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
   const { data, width: w } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  // Search the lower 65% of the silhouette only (skip the head zone).
-  const yStart = bbox.top + Math.floor(bbox.height * 0.35);
-  const yEnd = bbox.top + Math.floor(bbox.height * 0.95);
+  const yStart = bbox.top + Math.floor(bbox.height * yStartRatio);
+  const yEnd = bbox.top + Math.floor(bbox.height * yEndRatio);
   let bestY = yStart;
   let bestWidth = -1;
   let bestLeft = bbox.left;

@@ -60,54 +60,61 @@ export function pickBlendMode(brand: BrandProfile): "multiply" | "screen" {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Translate a brand profile into a FLUX prompt.
+ * Translate a brand profile into a FLUX prompt that produces a
+ * CLASSIC METAL ROBOT MASCOT — upper-body portrait, polished metal
+ * construction, with a clean uniform METALLIC CHEST PLATE in the
+ * centre of the torso (the logo drop zone).
  *
  * Key insights from iteration:
  *
- * - "Wearing X" descriptions stick FAR better than "no chest emblem"
- *   negations. FLUX honours positive descriptions; negative ones are
- *   often ignored.
+ * - Positive descriptions stick FAR better than negations. Describing
+ *   the chest plate as "smooth polished plain metal panel" works;
+ *   "no chest emblem" alone gets ignored.
  *
- * - The colour spec for the t-shirt has to LEAD the prompt and use
- *   a strong qualifier ("pristine pure-white", "rich deep brown"),
- *   otherwise the model uses the brand's mood words ("cool",
- *   "technical", "warm") to dictate the body palette and overrides
- *   the requested colour.
+ * - Upper-body crop is essential for branding — gives a tight portrait
+ *   with the chest unmistakably in frame. Whole-body shots place the
+ *   chest too high in the silhouette and waste visual space on legs.
  *
- * - The t-shirt colour is the LIGHTER of primary/secondary so the
+ * - The chest plate colour is the LIGHTER of primary/secondary so the
  *   logo (in the darker brand colour) lands with contrast.
  *
- * - Brand mood / visual brief comes LAST, as flavour — never first.
+ * - Strong colour qualifiers ("pristine bright pure", "rich vivid")
+ *   help FLUX honour the requested colour against the brand's mood
+ *   words ("cool", "warm") which otherwise hijack the palette.
  *
- * - Background colour also gets the "uniform flat solid" treatment
- *   so the client-side flood-fill removes it cleanly.
+ * - Brand mood / visual brief comes LAST, as flavour — never first.
  */
 export function composeFluxPrompt(brand: BrandProfile): string {
-  const torsoColor = pickTorsoColor(brand);
-  const otherColor =
-    torsoColor === brand.primaryColor ? brand.secondaryColor : brand.primaryColor;
+  const chestColor = pickTorsoColor(brand);
+  const bodyColor =
+    chestColor === brand.primaryColor ? brand.secondaryColor : brand.primaryColor;
   const bgRgb = hexToRgb(brand.backgroundColor);
-  const tsRgb = hexToRgb(torsoColor);
-  const tsQualifier = colorQualifier(torsoColor);
+  const chestRgb = hexToRgb(chestColor);
+  const chestQualifier = colorQualifier(chestColor);
+  const bodyQualifier = colorQualifier(bodyColor);
   const keywords = brand.styleKeywords.join(", ");
   return [
-    // 1. SCENE
-    "A friendly minimal robot character mascot, upper body portrait,",
-    "simple flat modern cartoon style, looking straight forward.",
-    // 2. T-SHIRT (the most important visual contract — leads here)
-    `Wearing a ${tsQualifier} ${torsoColor} t-shirt over its chest —`,
-    `the t-shirt fabric is unmistakably ${tsQualifier} ${torsoColor}, color rgb(${tsRgb.r},${tsRgb.g},${tsRgb.b}),`,
-    "completely flat, perfectly smooth, perfectly empty —",
-    "no logos, no text, no patterns, no buttons, no graphics, no decorations, no seams visible.",
-    // 3. BODY PARTS (subordinate to the t-shirt)
-    `Robot head, arms and hands in ${otherColor} matte metal tones, simple and minimal.`,
+    // 1. SCENE — robot type, framing
+    "A friendly minimal robot character mascot, simple modern cartoon style,",
+    "smooth polished metal construction.",
+    "Upper body portrait — head and torso only, cropped just below the chest.",
+    "Looking straight forward.",
+    // 2. CHEST PLATE — the logo drop zone, leads the description
+    `The robot has a clearly visible smooth metallic chest plate in the center of its torso —`,
+    `a polished plain panel of ${chestQualifier} ${chestColor} metal (color rgb(${chestRgb.r},${chestRgb.g},${chestRgb.b})),`,
+    "like a single uniform piece, perfectly flat, completely empty.",
+    "No logo, no symbol, no gauge, no button, no rivet, no engraving,",
+    "no circle, no emblem, no decoration — just a plain blank metallic chest panel.",
+    // 3. OTHER BODY PARTS — subordinate to the chest plate
+    `Other body parts (head, neck, shoulders, arms, hands) in ${bodyQualifier} ${bodyColor} matte metal tones, simple and minimal.`,
     // 4. MOOD (comes last)
     `Overall mood: ${keywords}. ${brand.visualBrief}`,
     // 5. BACKGROUND
     `On a flat pure solid uniform ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}),`,
     "no gradients, no patterns, no shadow falloff, perfectly uniform colour edge-to-edge.",
     // 6. STYLE FINISH
-    "Sharp clean silhouette, no glow effects, no lens flares, no rim light, no bright specular highlights.",
+    "Sharp clean silhouette. Cute friendly character.",
+    "No glow effects, no lens flares, no rim light, no bright specular highlights on the chest plate.",
   ].join(" ");
 }
 
@@ -178,28 +185,35 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
   const rawDataUri = await blobToDataUri(rawBlob);
   const rawImgEl = await loadImage(rawBlob);
 
-  // BG removal
+  // BG removal — sample the ACTUAL corner colour rather than trusting
+  // brand.backgroundColor. FLUX often paints a slightly different
+  // background colour than asked for (the brand mood drifts it). The
+  // sampled-corner approach is robust to that drift: whatever colour
+  // FLUX actually put in the corners IS the background, by definition.
   const robotCanvas = imageToCanvas(rawImgEl);
-  removeSolidBackground(robotCanvas, brand.backgroundColor, 38);
+  const sampledBgHex = sampleCornerColor(robotCanvas);
+  removeSolidBackground(robotCanvas, sampledBgHex, 38);
 
   // Torso detection — multi-strategy with sanity checks.
   //
-  // Order:
-  //   1. Colour-match RESTRICTED TO LOWER HALF of the silhouette (so
-  //      head highlights — antenna tips, lens flares, edge specular —
-  //      can't be confused for the t-shirt). When FLUX honoured the
-  //      requested torso colour, this gives the tightest centre.
-  //   2. Silhouette-width fallback: find the widest row in the lower
-  //      65% of the silhouette. Provider-agnostic — works even if
-  //      FLUX painted the t-shirt the wrong colour.
-  //   3. Plain bbox-58% as the last-resort fallback.
+  // For UPPER-BODY crops (metal robot prompt, head + torso only), the
+  // chest plate sits in the 50-85% band of the silhouette bbox. The
+  // earlier 35-90% band was for full-body shots where the chest was
+  // higher up the legs-included silhouette. Tighter bounds = better
+  // rejection of false matches.
   //
-  // After each candidate we sanity-check that the centerY sits inside
-  // the chest band (35-90% of the bbox height). Reject and try the
-  // next strategy if not.
+  // Order:
+  //   1. Colour-match RESTRICTED TO THE CHEST BAND (so head highlights
+  //      — antenna tips, lens flares, edge specular — can't be
+  //      confused for the chest plate).
+  //   2. Silhouette-width fallback: find the widest row within the
+  //      chest band. Provider-agnostic — works even if FLUX painted
+  //      the chest plate the wrong colour.
+  //   3. Plain bbox-65% as the last-resort fallback (chest sits ~65%
+  //      down an upper-body silhouette).
   const torsoColor = pickTorsoColor(brand);
   const bbox = detectSilhouetteBox(robotCanvas);
-  const chestYMin = bbox.top + Math.floor(bbox.height * 0.35);
+  const chestYMin = bbox.top + Math.floor(bbox.height * 0.50);
   const chestYMax = bbox.top + Math.floor(bbox.height * 0.90);
   const isInChestBand = (cy: number): boolean => cy >= chestYMin && cy <= chestYMax;
 
@@ -227,7 +241,9 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
     } else {
       torso = {
         centerX: Math.round(bbox.left + bbox.width / 2),
-        centerY: Math.round(bbox.top + bbox.height * 0.58),
+        // Upper-body crop: the chest plate is around 65% down the
+        // silhouette (vs ~55% on a full-body crop with legs).
+        centerY: Math.round(bbox.top + bbox.height * 0.65),
         diameter: Math.round(bbox.width * 0.38),
       };
       torsoSource = "bbox-heuristic";
@@ -368,4 +384,36 @@ function base64ToBlob(base64: string, contentType: string): Blob {
   const arr = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
   return new Blob([arr], { type: contentType });
+}
+
+/**
+ * Average the four corner pixels of a canvas (with a small inset to
+ * avoid edge anti-aliasing) and return the resulting colour as a
+ * `#rrggbb` hex string. Used as the actual flood-fill reference for
+ * background removal — robust to FLUX colour drift on the brand's
+ * declared backgroundColor.
+ */
+function sampleCornerColor(canvas: HTMLCanvasElement): string {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+  const { width: w, height: h } = canvas;
+  const inset = 4;
+  const samples = [
+    ctx.getImageData(inset, inset, 1, 1).data,
+    ctx.getImageData(w - 1 - inset, inset, 1, 1).data,
+    ctx.getImageData(inset, h - 1 - inset, 1, 1).data,
+    ctx.getImageData(w - 1 - inset, h - 1 - inset, 1, 1).data,
+  ];
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (const px of samples) {
+    r += px[0]!;
+    g += px[1]!;
+    b += px[2]!;
+  }
+  const avg = [r / samples.length, g / samples.length, b / samples.length].map(
+    (v) => Math.round(v).toString(16).padStart(2, "0"),
+  );
+  return `#${avg.join("")}`;
 }
