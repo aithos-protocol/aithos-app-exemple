@@ -27,10 +27,14 @@
 //   8. Step 4 — Composite:   treated logo onto the robot chest.
 //                            Sliders re-render live and let the
 //                            operator override the plan.
+//   9. Step 5 — Judge:       Sonnet 4.6 (vision) judges the composite
+//                            harmony. If 'skip_logo', the Final output
+//                            panel falls back to the bare robot.
 //
-// The locked COMPOSITION_TEMPLATE (in brand-agent.ts) is unchanged
-// from v12.2 — it already forbids any chest decoration, leaving the
-// chest as a single uniform panel for the logo to land on.
+// The locked COMPOSITION_TEMPLATE (in brand-agent.ts) has been
+// strengthened with positive phrasing + emphatic constraints to keep
+// diffusion models from drawing chest plates / seams / emblems that
+// would compete with the composited logo.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -52,8 +56,10 @@ import {
 import { canvasToBlob } from "../lib/image-pipeline.js";
 import {
   applyTreatmentToLogo,
+  judgeCompositeHarmony,
   planLogoTreatment,
   type AppliedTreatmentResult,
+  type CompositeJudgment,
   type TreatmentPlan,
 } from "../lib/treatment-agent.js";
 import {
@@ -221,6 +227,11 @@ export function BrandedRobot() {
   const [step4Result, setStep4Result] = useState<Step4CompositeResult | null>(null);
   const step4DebounceRef = useRef<number | null>(null);
 
+  // --- Step 5 (judge composite harmony) state ---
+  const [judgeRunning, setJudgeRunning] = useState(false);
+  const [judgment, setJudgment] = useState<CompositeJudgment | null>(null);
+  const [judgeError, setJudgeError] = useState<string | null>(null);
+
   // Populate editable fields when a fresh proposal arrives.
   useEffect(() => {
     if (designProposal === null) return;
@@ -244,7 +255,15 @@ export function BrandedRobot() {
     setTreatedLogo(null);
     setTreatmentError(null);
     setStep4Result(null);
+    setJudgment(null);
+    setJudgeError(null);
   }, [generated, logo]);
+
+  // The judgment becomes stale whenever step4Result changes — invalidate it.
+  useEffect(() => {
+    setJudgment(null);
+    setJudgeError(null);
+  }, [step4Result]);
 
   // Auto-recomposite (Step 4) when its inputs settle.
   useEffect(() => {
@@ -450,6 +469,23 @@ export function BrandedRobot() {
     }
   };
 
+  const runJudgment = async () => {
+    if (!step4Result) return;
+    setJudgeRunning(true);
+    setJudgeError(null);
+    try {
+      const r = await judgeCompositeHarmony({
+        sdk,
+        compositeBlob: step4Result.blob,
+      });
+      setJudgment(r);
+    } catch (e) {
+      setJudgeError(formatError(e));
+    } finally {
+      setJudgeRunning(false);
+    }
+  };
+
   const runSmartTreatment = async () => {
     if (!step3Result || !vision) return;
     if (vision.chestColorHex === null) {
@@ -510,12 +546,13 @@ export function BrandedRobot() {
 
   return (
     <section>
-      <h2>Branded robot — v13 (description-driven, smart logo overlay)</h2>
+      <h2>Branded robot — v13 (description-driven, judged composite)</h2>
       <p className="lede">
         Describe the brand → Sonnet proposes a visualBrief + palette →
         upload a logo → generate the robot → Sonnet locates the chest →
-        the logo is background-removed, then Sonnet (vision) picks the
-        recolour action, blend mode, and opacity in one call. The
+        the logo is background-removed → Sonnet (vision) picks recolour
+        + blend + opacity → composite → Sonnet judges the result and
+        falls back to a bare robot if the logo doesn't sit well. The
         operator can override anything via the Step 4 sliders.
       </p>
 
@@ -986,22 +1023,117 @@ export function BrandedRobot() {
               <div style={{ marginTop: 12, maxWidth: 520 }}>
                 <img
                   src={step4Result.dataUri}
-                  alt="final composite"
+                  alt="composite"
                   style={{ width: "100%", height: "auto", display: "block", borderRadius: 6 }}
                 />
-                <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                  <a
-                    href={step4Result.dataUri}
-                    download={`mascot-${Date.now()}.png`}
-                  >
-                    Download PNG
-                  </a>
-                </div>
               </div>
             )}
           </>
         )}
       </section>
+
+      {/* ===================== Step 5 — Judge composite ===================== */}
+      <section style={stepStyle}>
+        <h3>Step 5 — Judge composite harmony (Sonnet)</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          Sonnet 4.6 vision sees the final composite and decides whether
+          the logo is mounted harmoniously, or whether we should fall
+          back to the bare robot. If the verdict is{" "}
+          <code>skip_logo</code>, the &ldquo;Final output&rdquo; panel
+          below shows the robot WITHOUT the logo.
+        </p>
+        <button
+          type="button"
+          onClick={() => void runJudgment()}
+          disabled={!step4Result || judgeRunning}
+        >
+          {judgeRunning
+            ? "Asking Sonnet…"
+            : judgment
+              ? "Re-judge"
+              : "Judge composite"}
+        </button>
+        {!step4Result && (
+          <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
+            Run Step 4 first.
+          </em>
+        )}
+        {judgeError && (
+          <div className="error" style={{ marginTop: 8 }}>{judgeError}</div>
+        )}
+
+        {judgment && (
+          <dl className="kvtable" style={{ marginTop: 12, fontSize: "0.85em" }}>
+            <dt>Verdict</dt>
+            <dd>
+              <strong
+                style={{
+                  color: judgment.verdict === "harmonious" ? "#0a0" : "#a40",
+                }}
+              >
+                {judgment.verdict === "harmonious"
+                  ? "✓ Harmonious — ship with logo"
+                  : "✗ Skip logo — ship the bare robot"}
+              </strong>
+            </dd>
+            {judgment.issues.length > 0 && (
+              <>
+                <dt>Issues</dt>
+                <dd>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {judgment.issues.map((issue, i) => (
+                      <li key={i}>{issue}</li>
+                    ))}
+                  </ul>
+                </dd>
+              </>
+            )}
+            <dt>Reasoning</dt>
+            <dd style={{ fontStyle: "italic" }}>{judgment.reasoning}</dd>
+            <dt>Confidence</dt>
+            <dd>{(judgment.confidence * 100).toFixed(0)}%</dd>
+            <dt>Cost</dt>
+            <dd>{judgment.creditsSpent.toLocaleString()} mc</dd>
+          </dl>
+        )}
+      </section>
+
+      {/* ===================== Final output ===================== */}
+      {generated && (
+        <section style={{ ...stepStyle, background: "#fafafa" }}>
+          <h3>Final output</h3>
+          <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+            {judgment === null
+              ? step4Result
+                ? "Showing the composite. Run Step 5 to validate (or accept as-is)."
+                : "Showing the bare robot — no logo composited yet."
+              : judgment.verdict === "harmonious"
+                ? "Sonnet approved the composite — shipping with logo."
+                : "Sonnet rejected the composite — shipping the bare robot (logo dropped)."}
+          </p>
+          {(() => {
+            const useComposite =
+              step4Result !== null &&
+              (judgment === null || judgment.verdict === "harmonious");
+            const finalUri = useComposite
+              ? step4Result?.dataUri
+              : generated.rawDataUri;
+            const filename = useComposite ? "mascot-with-logo.png" : "mascot-bare.png";
+            return finalUri ? (
+              <div style={{ marginTop: 12, maxWidth: 520 }}>
+                <img
+                  src={finalUri}
+                  alt="final output"
+                  style={{ width: "100%", height: "auto", display: "block", borderRadius: 6 }}
+                />
+                <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                  <a href={finalUri} download={filename}>Download PNG</a>
+                </div>
+              </div>
+            ) : null;
+          })()}
+        </section>
+      )}
     </section>
   );
 }

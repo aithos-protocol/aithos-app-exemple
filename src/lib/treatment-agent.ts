@@ -78,6 +78,20 @@ export interface AppliedTreatmentResult {
   readonly colorApplied: string | null;
 }
 
+export type CompositeVerdict = "harmonious" | "skip_logo";
+
+export interface CompositeJudgment {
+  readonly verdict: CompositeVerdict;
+  /** Empty when verdict === 'harmonious'. */
+  readonly issues: readonly string[];
+  readonly reasoning: string;
+  readonly confidence: number;
+  /** Raw model content for debugging. */
+  readonly rawContent: string;
+  /** Microcredits debited. */
+  readonly creditsSpent: number;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Sonnet vision call                                                        */
 /* -------------------------------------------------------------------------- */
@@ -392,4 +406,151 @@ export async function applyTreatmentToLogo(args: {
       colorApplied: targetHex,
     };
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Step 5 — Judge composite harmony (Sonnet vision)                          */
+/* -------------------------------------------------------------------------- */
+
+const JUDGE_PROMPT = [
+  "You are a brand-design critic. The image you are looking at shows a",
+  "robot mascot illustration with a brand emblem (logo) composited onto",
+  "its chest. Your job is to judge whether the result is HARMONIOUS and",
+  "READY TO SHIP, or whether the logo should be REMOVED (the robot",
+  "alone, without the emblem, would be better than this composite).",
+  "",
+  "A HARMONIOUS composite has:",
+  "- Logo clearly VISIBLE against the chest (not blended into invisibility).",
+  "- Logo COLOUR contrasts adequately with the chest surface.",
+  "- Logo at a REASONABLE SIZE — not microscopic, not overflowing.",
+  "- Logo POSITIONED on the chest panel, roughly centred, not on the",
+  "  shoulder, neck, abdomen, or outside the body silhouette.",
+  "- Logo STYLE harmonises with the robot's illustration style (a clean",
+  "  vector emblem on a clean cel-shaded robot, etc.).",
+  "- NO competing visual elements on the chest fighting the logo (other",
+  "  markings, seams, plates that visually clash).",
+  "",
+  "FAIL the composite (verdict 'skip_logo') if ANY of these are true:",
+  "- Logo is invisible or nearly invisible (colour-on-colour match).",
+  "- Logo colour clashes badly with the robot's palette.",
+  "- Logo is too small to read OR overflowing the chest area.",
+  "- Logo is mispositioned (off the chest, on shoulder/neck/face).",
+  "- Logo's style is jarringly incompatible (photographic logo on cartoon",
+  "  robot, kid-style on B2B robot, etc.).",
+  "- The chest has pre-existing markings / seams / plates that visually",
+  "  compete with the logo and make the result look messy.",
+  "- The composite looks generally unprofessional or AI-glitchy in a way",
+  "  that the bare robot would not.",
+  "",
+  "Be HONEST: if the composite is mediocre or worse, say 'skip_logo'.",
+  "The downstream system will gracefully fall back to the robot WITHOUT",
+  "the logo. A clean robot is a perfectly acceptable final result. Don't",
+  "approve a composite just because it's 'almost good' — only approve it",
+  "if shipping it would make the brand look POLISHED.",
+  "",
+  "Output ONLY this JSON, no markdown fences, no commentary:",
+  "",
+  "{",
+  '  "verdict": "<harmonious|skip_logo>",',
+  '  "issues": ["<short issue 1>", "<short issue 2>", ...],',
+  '  "reasoning": "<one to three sentences explaining your decision>",',
+  '  "confidence": <0.0..1.0>',
+  "}",
+  "",
+  "If verdict is 'harmonious', `issues` MUST be an empty array [].",
+  "If verdict is 'skip_logo', `issues` MUST contain at least one short",
+  "phrase describing what went wrong.",
+].join("\n");
+
+/**
+ * Ask Sonnet 4.6 (vision) whether the final composite is publish-ready
+ * or should fall back to the bare robot.
+ */
+export async function judgeCompositeHarmony(args: {
+  readonly sdk: AithosSDK;
+  /** The final composite image as a PNG blob. */
+  readonly compositeBlob: Blob;
+}): Promise<CompositeJudgment> {
+  const compute = args.sdk.compute as unknown as {
+    invokeBedrockVision(a: {
+      image: Blob;
+      prompt: string;
+      model?: string;
+      maxTokens?: number;
+    }): Promise<{ content: string; creditsCharged: number }>;
+  };
+
+  console.log("[treatment-agent] judging composite harmony…");
+  const t0 = performance.now();
+  const r = await compute.invokeBedrockVision({
+    image: args.compositeBlob,
+    prompt: JUDGE_PROMPT,
+    model: "claude-sonnet-4-6",
+    maxTokens: 600,
+  });
+  console.log(
+    `[treatment-agent] judge returned in ${(performance.now() - t0).toFixed(0)}ms, credits=${r.creditsCharged}`,
+  );
+  console.log("[treatment-agent] raw content:", r.content);
+
+  const parsed = parseJudgment(r.content);
+  return {
+    verdict: parsed.verdict,
+    issues: parsed.issues,
+    reasoning: parsed.reasoning,
+    confidence: parsed.confidence,
+    rawContent: r.content,
+    creditsSpent: r.creditsCharged,
+  };
+}
+
+function parseJudgment(content: string): {
+  verdict: CompositeVerdict;
+  issues: string[];
+  reasoning: string;
+  confidence: number;
+} {
+  let text = content.trim();
+  text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(
+      `Composite judgment: non-JSON content (first 200 chars): ${content.slice(0, 200)}`,
+    );
+  }
+  let obj: unknown;
+  try {
+    obj = JSON.parse(text.slice(start, end + 1));
+  } catch (e) {
+    throw new Error(
+      `Composite judgment: malformed JSON: ${(e as Error).message}`,
+    );
+  }
+  if (!obj || typeof obj !== "object") {
+    throw new Error("Composite judgment: JSON is not an object");
+  }
+  const r = obj as Record<string, unknown>;
+
+  const v = typeof r.verdict === "string" ? r.verdict : "";
+  if (v !== "harmonious" && v !== "skip_logo") {
+    throw new Error(
+      `Composite judgment: verdict must be 'harmonious' or 'skip_logo'; got ${JSON.stringify(r.verdict)}`,
+    );
+  }
+  const verdict = v as CompositeVerdict;
+
+  const issues: string[] = Array.isArray(r.issues)
+    ? r.issues.filter((x): x is string => typeof x === "string")
+    : [];
+
+  return {
+    verdict,
+    issues,
+    reasoning: typeof r.reasoning === "string" ? r.reasoning : "",
+    confidence:
+      typeof r.confidence === "number" && r.confidence >= 0 && r.confidence <= 1
+        ? r.confidence
+        : 0,
+  };
 }
