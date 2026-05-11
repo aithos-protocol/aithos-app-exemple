@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// /branded-robot — v13 pipeline (description-driven + logo overlay).
+// /branded-robot — v13 pipeline (description-driven + smart logo overlay).
 //
 // Front-end flow:
 //
@@ -18,11 +18,15 @@
 //   5. Step 2 — Vision:      Sonnet 4.6 (vision) returns logo center,
 //                            diameter, and sampled chestColorHex.
 //   6. Step 3 — Prepare:     background removal on the uploaded logo.
-//   7. Step 3.5 — Recolor:   flatten to a brand-colour silhouette
-//                            (primary by default; auto-swap to
-//                            secondary if too close to chestColorHex).
-//   8. Step 4 — Composite:   recoloured silhouette + multiply blend on
-//                            the robot chest. Sliders re-render live.
+//   7. Step 3.5 — Treat:     Sonnet 4.6 (vision) sees the prepared
+//                            logo, receives chest + brand palette in
+//                            text, and decides recolor action + blend
+//                            mode + opacity in ONE call. The recolor
+//                            is applied immediately and the blend /
+//                            opacity overwrite Step 4 defaults.
+//   8. Step 4 — Composite:   treated logo onto the robot chest.
+//                            Sliders re-render live and let the
+//                            operator override the plan.
 //
 // The locked COMPOSITION_TEMPLATE (in brand-agent.ts) is unchanged
 // from v12.2 — it already forbids any chest decoration, leaving the
@@ -32,14 +36,11 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   COMPOSITION_TEMPLATE,
-  DEFAULT_CONTRAST_THRESHOLD,
   step1GenerateRobot,
   step3PrepareLogo,
-  step3_5RecolorLogo,
   step4Composite,
   type Step1Result,
   type Step3LogoResult,
-  type Step3_5RecolorResult,
   type Step4CompositeResult,
   type Step4Settings,
 } from "../lib/brand-agent.js";
@@ -48,6 +49,13 @@ import {
   designRobotFromDescription,
   type DesignProposal,
 } from "../lib/design-agent.js";
+import { canvasToBlob } from "../lib/image-pipeline.js";
+import {
+  applyTreatmentToLogo,
+  planLogoTreatment,
+  type AppliedTreatmentResult,
+  type TreatmentPlan,
+} from "../lib/treatment-agent.js";
 import {
   detectTorsoByVision,
   type VisionTorsoResult,
@@ -194,13 +202,11 @@ export function BrandedRobot() {
   const [step3Result, setStep3Result] = useState<Step3LogoResult | null>(null);
   const [step3Error, setStep3Error] = useState<string | null>(null);
 
-  // --- Step 3.5 (recolor) state ---
-  const [step3_5Running, setStep3_5Running] = useState(false);
-  const [step3_5Result, setStep3_5Result] = useState<Step3_5RecolorResult | null>(null);
-  const [step3_5Error, setStep3_5Error] = useState<string | null>(null);
-  const [contrastThreshold, setContrastThreshold] = useState<number>(
-    DEFAULT_CONTRAST_THRESHOLD,
-  );
+  // --- Step 3.5 (smart treatment via Sonnet) state ---
+  const [treatmentRunning, setTreatmentRunning] = useState(false);
+  const [treatmentPlan, setTreatmentPlan] = useState<TreatmentPlan | null>(null);
+  const [treatedLogo, setTreatedLogo] = useState<AppliedTreatmentResult | null>(null);
+  const [treatmentError, setTreatmentError] = useState<string | null>(null);
 
   // --- Step 4 (composite) state ---
   const [settings, setSettings] = useState<Step4Settings>({
@@ -234,14 +240,15 @@ export function BrandedRobot() {
     setStep2Error(null);
     setStep3Result(null);
     setStep3Error(null);
-    setStep3_5Result(null);
-    setStep3_5Error(null);
+    setTreatmentPlan(null);
+    setTreatedLogo(null);
+    setTreatmentError(null);
     setStep4Result(null);
   }, [generated, logo]);
 
   // Auto-recomposite (Step 4) when its inputs settle.
   useEffect(() => {
-    if (!generated || !vision || !step3_5Result) return;
+    if (!generated || !vision || !treatedLogo) return;
     if (step4DebounceRef.current !== null) {
       window.clearTimeout(step4DebounceRef.current);
     }
@@ -269,7 +276,7 @@ export function BrandedRobot() {
               florencePolygon: null,
               debugOverlayDataUri: debugOverlay ?? "",
             },
-            logo: step3_5Result,
+            logo: treatedLogo,
             settings,
           });
           setStep4Result(r);
@@ -278,7 +285,7 @@ export function BrandedRobot() {
         }
       })();
     }, 80);
-  }, [generated, vision, step3_5Result, settings, debugOverlay]);
+  }, [generated, vision, treatedLogo, settings, debugOverlay]);
 
   const isAuthenticated = state.canSignAsOwner || state.delegates.length > 0;
   if (!isAuthenticated) {
@@ -372,8 +379,9 @@ export function BrandedRobot() {
     if (!generated) return;
     setStep2Running(true);
     setStep2Error(null);
-    setStep3_5Result(null);
-    setStep3_5Error(null);
+    setTreatmentPlan(null);
+    setTreatedLogo(null);
+    setTreatmentError(null);
     setStep4Result(null);
     try {
       const r = await detectTorsoByVision(sdk, generated.rawCanvas);
@@ -419,8 +427,9 @@ export function BrandedRobot() {
     if (!logo) return;
     setStep3Running(true);
     setStep3Error(null);
-    setStep3_5Result(null);
-    setStep3_5Error(null);
+    setTreatmentPlan(null);
+    setTreatedLogo(null);
+    setTreatmentError(null);
     setStep4Result(null);
     try {
       const r = await step3PrepareLogo({
@@ -441,40 +450,73 @@ export function BrandedRobot() {
     }
   };
 
-  const runStep3_5 = async () => {
-    if (!step3Result) return;
-    setStep3_5Running(true);
-    setStep3_5Error(null);
+  const runSmartTreatment = async () => {
+    if (!step3Result || !vision) return;
+    if (vision.chestColorHex === null) {
+      setTreatmentError(
+        "Sonnet vision didn't return a chest colour at Step 2 — can't plan treatment. Re-run Step 2.",
+      );
+      return;
+    }
+    setTreatmentRunning(true);
+    setTreatmentError(null);
     setStep4Result(null);
     try {
-      const r = await step3_5RecolorLogo({
-        brand: buildAdHocBrand({
-          visualBrief,
-          primaryColor,
-          secondaryColor,
-          backgroundColor,
-        }),
-        logo: step3Result,
-        chestColorHex: vision?.chestColorHex ?? null,
-        contrastThreshold,
+      // The prepared logo as a Blob — needed for Sonnet vision input.
+      const logoBlob = await canvasToBlob(
+        // step3Result.processedImg → canvas via decode
+        await (async () => {
+          const c = document.createElement("canvas");
+          c.width = step3Result.processedImg.naturalWidth;
+          c.height = step3Result.processedImg.naturalHeight;
+          const ctx = c.getContext("2d");
+          if (!ctx) throw new Error("2d context unavailable");
+          ctx.drawImage(step3Result.processedImg, 0, 0);
+          return c;
+        })(),
+      );
+
+      const plan = await planLogoTreatment({
+        sdk,
+        logoBlob,
+        chestColorHex: vision.chestColorHex,
+        primaryColor,
+        secondaryColor,
       });
-      setStep3_5Result(r);
+      setTreatmentPlan(plan);
+
+      const applied = await applyTreatmentToLogo({
+        preparedImg: step3Result.processedImg,
+        preparedDataUri: step3Result.processedDataUri,
+        plan,
+        primaryColor,
+        secondaryColor,
+      });
+      setTreatedLogo(applied);
+
+      // Auto-apply blend mode + opacity from the plan into Step 4
+      // settings. The operator can still override via the sliders.
+      setSettings((s) => ({
+        ...s,
+        blendMode: plan.blendMode,
+        opacity: plan.opacity,
+      }));
     } catch (e) {
-      setStep3_5Error(formatError(e));
+      setTreatmentError(formatError(e));
     } finally {
-      setStep3_5Running(false);
+      setTreatmentRunning(false);
     }
   };
 
   return (
     <section>
-      <h2>Branded robot — v13 (description-driven, with logo)</h2>
+      <h2>Branded robot — v13 (description-driven, smart logo overlay)</h2>
       <p className="lede">
         Describe the brand → Sonnet proposes a visualBrief + palette →
         upload a logo → generate the robot → Sonnet locates the chest →
-        the logo is background-removed, flattened to a brand-colour
-        silhouette (auto-contrast vs the chest), and composited with a
-        multiply blend.
+        the logo is background-removed, then Sonnet (vision) picks the
+        recolour action, blend mode, and opacity in one call. The
+        operator can override anything via the Step 4 sliders.
       </p>
 
       {/* ===================== Describe the brand ===================== */}
@@ -831,100 +873,99 @@ export function BrandedRobot() {
         )}
       </section>
 
-      {/* ===================== Step 3.5 — Recolor silhouette ===================== */}
+      {/* ===================== Step 3.5 — Smart treatment ===================== */}
       <section style={stepStyle}>
-        <h3>Step 3.5 — Recolour to brand-colour silhouette</h3>
+        <h3>Step 3.5 — Plan &amp; apply treatment (Sonnet)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Flattens the logo to a monochrome silhouette in the primary
-          colour. If the primary clashes with the chest surface colour
-          sampled by Sonnet, auto-swaps to the secondary so the logo
-          stays legible.
+          Sonnet 4.6 vision sees the prepared logo, receives the chest
+          surface colour (Step 2) and the brand palette, and decides
+          THREE things at once: whether to recolour the logo, which
+          blend mode to use, and at what opacity. The plan is applied
+          immediately — recolour runs (or is skipped), and the chosen
+          blend / opacity overwrite Step 4 settings. You can still
+          tweak the sliders below to override.
         </p>
-
-        <label style={{ display: "block", marginBottom: 8 }}>
-          <span style={{ display: "block", fontSize: "0.85em" }}>
-            Contrast threshold (RGB distance) — {contrastThreshold}
-            <em style={{ marginLeft: 8, color: "#888" }}>
-              (default {DEFAULT_CONTRAST_THRESHOLD}; below this, swap to secondary)
-            </em>
-          </span>
-          <input
-            type="range" min={0} max={200} step={5}
-            value={contrastThreshold}
-            onChange={(e) => setContrastThreshold(Number(e.target.value))}
-            style={{ width: "100%", maxWidth: 360 }}
-          />
-        </label>
 
         <button
           type="button"
-          onClick={() => void runStep3_5()}
-          disabled={!step3Result || step3_5Running}
+          onClick={() => void runSmartTreatment()}
+          disabled={!step3Result || !vision || treatmentRunning}
         >
-          {step3_5Running
-            ? "Recolouring…"
-            : step3_5Result
-              ? "Re-apply recolour"
-              : "Recolour logo"}
+          {treatmentRunning
+            ? "Asking Sonnet…"
+            : treatmentPlan
+              ? "Re-plan &amp; apply"
+              : "Plan &amp; apply treatment"}
         </button>
         {!step3Result && (
           <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
             Run Step 3 first.
           </em>
         )}
-        {step3_5Error && <div className="error" style={{ marginTop: 8 }}>{step3_5Error}</div>}
+        {step3Result && !vision && (
+          <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
+            Run Step 2 first.
+          </em>
+        )}
+        {treatmentError && (
+          <div className="error" style={{ marginTop: 8 }}>{treatmentError}</div>
+        )}
 
-        {step3_5Result && (
+        {treatmentPlan && treatedLogo && (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
               <figure style={{ margin: 0 }}>
-                <figcaption style={figcapStyle}>Input (transparent logo)</figcaption>
+                <figcaption style={figcapStyle}>Prepared (Step 3 output)</figcaption>
                 <img
                   src={step3Result?.processedDataUri ?? ""}
-                  alt="input"
+                  alt="prepared logo"
                   style={{ ...imgStyle, ...checkerBgStyle }}
                 />
               </figure>
               <figure style={{ margin: 0 }}>
                 <figcaption style={figcapStyle}>
-                  Silhouette ({step3_5Result.colorUsed} = <code>{step3_5Result.colorHex}</code>)
-                  {step3_5Result.contrastTriggered && (
-                    <em style={{ color: "#a60", marginLeft: 6 }}>auto-swapped</em>
-                  )}
+                  Treated ({treatedLogo.action.replace("_", " ")}
+                  {treatedLogo.colorApplied && (
+                    <> = <code>{treatedLogo.colorApplied}</code></>
+                  )})
                 </figcaption>
                 <img
-                  src={step3_5Result.processedDataUri}
-                  alt="recoloured logo"
+                  src={treatedLogo.processedDataUri}
+                  alt="treated logo"
                   style={{ ...imgStyle, ...checkerBgStyle }}
                 />
               </figure>
             </div>
 
             <dl className="kvtable" style={{ marginTop: 8, fontSize: "0.85em" }}>
-              <dt>Distance(primary, chest)</dt>
+              <dt>Recolor action</dt>
               <dd>
-                {step3_5Result.distanceToPrimary === null
-                  ? <em>no chest colour from Sonnet</em>
-                  : step3_5Result.distanceToPrimary.toFixed(0)}
-                {step3_5Result.distanceToPrimary !== null && (
-                  <em style={{ marginLeft: 8, color: "#888" }}>
-                    {step3_5Result.distanceToPrimary < step3_5Result.thresholdUsed
-                      ? "(below threshold → too close)"
-                      : "(above threshold → ok)"}
-                  </em>
+                <strong>{treatmentPlan.recolorAction.replace(/_/g, " ")}</strong>
+                {treatmentPlan.recolorCustomHex && (
+                  <>
+                    {" "}→{" "}
+                    <span style={{
+                      display: "inline-block",
+                      width: 14, height: 14,
+                      background: treatmentPlan.recolorCustomHex,
+                      border: "1px solid #888",
+                      verticalAlign: "middle",
+                      marginRight: 4,
+                    }} />
+                    <code>{treatmentPlan.recolorCustomHex}</code>
+                  </>
                 )}
               </dd>
-              <dt>Distance(secondary, chest)</dt>
-              <dd>
-                {step3_5Result.distanceToSecondary === null
-                  ? "—"
-                  : step3_5Result.distanceToSecondary.toFixed(0)}
-              </dd>
-              <dt>Decision</dt>
-              <dd>
-                Using <strong>{step3_5Result.colorUsed}</strong> ({step3_5Result.colorHex})
-                {step3_5Result.contrastTriggered && " — auto-swapped from primary"}
-              </dd>
+              <dt>Blend mode</dt>
+              <dd><code>{treatmentPlan.blendMode}</code></dd>
+              <dt>Opacity</dt>
+              <dd>{(treatmentPlan.opacity * 100).toFixed(0)}%</dd>
+              <dt>Confidence</dt>
+              <dd>{(treatmentPlan.confidence * 100).toFixed(0)}%</dd>
+              <dt>Reasoning</dt>
+              <dd style={{ fontStyle: "italic" }}>{treatmentPlan.reasoning}</dd>
+              <dt>Cost</dt>
+              <dd>{treatmentPlan.creditsSpent.toLocaleString()} mc</dd>
             </dl>
           </>
         )}
@@ -934,11 +975,11 @@ export function BrandedRobot() {
       <section style={stepStyle}>
         <h3>Step 4 — Composite</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          {!generated || !vision || !step3_5Result
+          {!generated || !vision || !treatedLogo
             ? "Run Steps 1, 2, 3 and 3.5 first."
-            : "Sliders re-render the composite live (multiply by default)."}
+            : "Sliders re-render live. Blend mode + opacity were set by Step 3.5; you can override."}
         </p>
-        {generated && vision && step3_5Result && (
+        {generated && vision && treatedLogo && (
           <>
             <Step4Controls settings={settings} onChange={setSettings} />
             {step4Result && (
