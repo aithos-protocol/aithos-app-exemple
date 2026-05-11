@@ -19,14 +19,15 @@ export interface BrandProfile {
   /** One-sentence service description (e.g. "Specialty coffee subscription"). */
   readonly service: string;
   /**
-   * Two-to-five-sentence brief of the brand's visual + emotional
-   * identity. Goes straight into the FLUX prompt — the more vivid the
-   * better. Avoid jargon, prefer mood words ("cozy", "premium",
-   * "artisanal", "playful", "minimal").
+   * The FULL per-brand prompt fed to the image model. Should
+   * describe the COMPANY (1-2 sentences) AND the desired robot
+   * design (silhouette, proportions, materials, mood, colors).
+   *
+   * The agent appends a hardcoded COMPOSITION_TEMPLATE so framing
+   * (crop, pose, lighting style) is identical across all brands.
+   * Don't put framing instructions here.
    */
   readonly visualBrief: string;
-  /** Style keywords (used as prompt amplifiers). */
-  readonly styleKeywords: readonly string[];
   /** Primary brand colour (the dominant body / accent colour). */
   readonly primaryColor: HexColor;
   /** Secondary brand colour. */

@@ -65,65 +65,65 @@ export function pickBlendMode(brand: BrandProfile): "multiply" | "screen" {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Translate a brand profile into a FLUX prompt that produces a
- * SMOOTH FLAT 2D BRAND MASCOT — clean isometric-illustration style,
- * uniform body with NO chest plate / panel / emblem area. The logo
- * is composited afterwards using pose-based torso detection, so the
- * prompt no longer needs to coax FLUX into leaving a coloured zone
- * on the chest (which kept producing structural panels with bolts).
+ * LOCKED composition template — appended verbatim to every brand
+ * brief so the framing is IDENTICAL across all generated mascots.
  *
- * Style reference: Aithos Builder mascot — friendly, modern,
- * vector-clean, NOT photorealistic, NOT industrial.
+ * Locking the framing has two consequences:
+ *
+ *   1. Visual consistency across the brand-mascot library — every
+ *      portrait has the same crop, head size, eye line, etc., so
+ *      they can be presented together (eg. on a website "Choose
+ *      your assistant" page) without one looking like a different
+ *      product.
+ *
+ *   2. Predictable downstream geometry — the Sonnet vision detector
+ *      sees the same anatomical anchors at roughly the same pixel
+ *      coordinates regardless of brand, so logo placement is stable.
+ *
+ * Anything visual that varies brand-to-brand (body shape, colours,
+ * mood, materials) belongs in the brand-specific brief. Anything
+ * structural (crop, pose, lighting style, background gradient,
+ * illustration style) belongs HERE.
  */
-export function composeFluxPrompt(brand: BrandProfile): string {
-  const bodyColor = pickTorsoColor(brand); // the lighter of primary/secondary
-  const accentColor =
-    bodyColor === brand.primaryColor ? brand.secondaryColor : brand.primaryColor;
-  const bgRgb = hexToRgb(brand.backgroundColor);
-  const bodyRgb = hexToRgb(bodyColor);
-  const bodyQualifier = colorQualifier(bodyColor);
-  const accentQualifier = colorQualifier(accentColor);
-  const keywords = brand.styleKeywords.join(", ");
-  return [
-    // 1. SCENE — framing first, style second
-    "A friendly minimal robot character mascot, BUST PORTRAIT — head, shoulders and upper torso only,",
-    "tightly cropped close-up just below the chest, NO legs visible, NO arms below the elbow.",
-    "Simple flat modern 2D cartoon illustration style, isometric character art look.",
-    // 2. STYLE NEGATIONS (placed early so they bias the whole composition)
-    "NOT photorealistic, NOT 3D rendered, NOT industrial steampunk, NOT metallic photoreal —",
-    "just clean flat 2D illustration with subtle soft shading.",
-    "Looking straight forward.",
-    // 3. BODY — uniform, smooth, no structural details on the chest
-    `The robot body is rendered in flat ${bodyQualifier} ${bodyColor} (color rgb(${bodyRgb.r},${bodyRgb.g},${bodyRgb.b})),`,
-    "smooth uniform surface, single piece — NO chest plate, NO panel, NO bolts, NO rivets,",
-    "NO seams, NO buttons, NO gauges, NO chest emblem, NO circle on the chest, NO decoration.",
-    "The torso is a CLEAN UNINTERRUPTED smooth surface, like a featureless mascot body.",
-    // 4. ACCENTS — headphones, joints, eyes (the only allowed visual interest)
-    `Headphones, eye sockets, and joint accents in ${accentQualifier} ${accentColor}.`,
-    // 5. BACKGROUND — colored + halo (kept in the final output)
-    `On a flat solid ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}),`,
-    "with a soft warm ambient halo glow behind the robot — atmospheric, modern brand-mascot framing.",
-    // 6. MOOD (last, as flavour)
-    `Mood: ${keywords}. ${brand.visualBrief}`,
-    // 7. STYLE FINISH
-    "Style: friendly modern tech-startup mascot, simple geometric shapes, clean vector-style lines, minimal details.",
-    "Cute approachable character.",
-  ].join(" ");
-}
+export const COMPOSITION_TEMPLATE = [
+  "COMPOSITION (kept identical across all brand mascots):",
+  "- Square 1:1 frame.",
+  "- BUST PORTRAIT — head, shoulders, and upper torso only.",
+  "- Cropped JUST BELOW the bottom edge of the pectoral muscles (NO arms below the elbow, NO legs, NO hands visible).",
+  "- The robot faces the viewer DIRECTLY — no 3/4 turn, no tilted head, perfectly symmetric.",
+  "- Centered horizontally in the frame; head occupies the top half, shoulders + upper torso fill the bottom half.",
+  "- Background: a flat solid color (specified in the brand brief) with a SUBTLE radial halo glow behind the head, color slightly complementary to the background (warmer if bg is dark, slightly darker if bg is light) suggesting depth.",
+  "- Style: clean modern flat 2D illustration with subtle cel shading. NOT photorealistic, NOT 3D rendered, NOT industrial steampunk, NOT metallic photoreal.",
+  "- Crisp clean vector-style lines, minimal visual noise, premium brand-mascot quality.",
+  "- The chest area is a CLEAN UNINTERRUPTED smooth surface — no chest plate, no panel seam, no rivets, no chest emblem, no logo, no decoration on the chest itself (a logo will be composited there afterwards by the agent).",
+].join("\n");
 
 /**
- * Pick an English qualifier that nudges FLUX towards the exact colour
- * we asked for. Without this, the model's interpretation drifts — a
- * "white" t-shirt becomes greyish, a "brown" becomes nearly black.
+ * Compose the full FLUX prompt: brand-specific visual brief
+ * (editable by the operator in the UI) + the LOCKED composition
+ * template + a final colour palette spec.
+ *
+ * The brand brief should describe the COMPANY + the desired robot
+ * SHAPE (silhouette, proportions, mood, materials). The composition
+ * template handles everything ELSE (framing, pose, lighting style,
+ * 2D-illustration style, clean-chest constraint) and must NOT be
+ * brand-customised — it's the contract that keeps the library
+ * visually consistent.
  */
-function colorQualifier(hex: string): string {
-  const { r, g, b } = hexToRgb(hex);
-  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  if (luma > 0.85) return "pristine bright pure";
-  if (luma > 0.60) return "soft warm clean";
-  if (luma > 0.35) return "rich vivid saturated";
-  return "deep rich dark";
+export function composeFluxPrompt(brand: BrandProfile): string {
+  const bgRgb = hexToRgb(brand.backgroundColor);
+  const primaryRgb = hexToRgb(brand.primaryColor);
+  return [
+    brand.visualBrief,
+    "",
+    COMPOSITION_TEMPLATE,
+    "",
+    "COLOR PALETTE:",
+    `- Primary brand colour (eye glow + small accents): ${brand.primaryColor} rgb(${primaryRgb.r},${primaryRgb.g},${primaryRgb.b}).`,
+    `- Background: ${brand.backgroundColor} rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}).`,
+  ].join("\n");
 }
+
 
 /* -------------------------------------------------------------------------- */
 /*  Step 1 — Generate robot (FLUX call + bg removal + torso detection)        */

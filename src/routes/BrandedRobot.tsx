@@ -1,27 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// /branded-robot — v11 simplified pipeline.
+// /branded-robot — v12 pipeline.
 //
-//   Step 1 — UPLOAD image  (no FLUX generation; reuse an existing PNG)
+//   Step 1 — GENERATE (brand-prompt + locked composition) OR UPLOAD
 //   Step 2 — Sonnet vision (single call, returns JSON with chest geometry)
 //   Step 3 — Prepare logo
 //   Step 4 — Composite
 //
-// Compared to v10:
-//   - Step 1 is now upload-only — no FLUX call, no FLUX cost. Lets us
-//     iterate on detection logic with a single fixed image.
-//   - Step 2 is just `detectTorsoByVision` — Sonnet 4.6 in vision mode.
-//     No Florence-2, no MediaPipe, no cascade. Sonnet understands
-//     perspective + brand-mascot conventions semantically, so the
-//     output naturally accounts for 3/4 turns and asymmetric framing.
-//   - Steps 3 and 4 are unchanged.
+// Step 1 v12 brings back FLUX/Imagen generation alongside upload, but
+// with a NEW prompt architecture: the brand-specific brief (editable
+// per test) is concatenated with a LOCKED COMPOSITION_TEMPLATE so the
+// crop is identical across all 4 brands. That gives us a brand-mascot
+// library where every portrait sits in the same frame, the Sonnet
+// vision detector sees the same anatomical anchors in roughly the
+// same pixel coordinates, and the logo lands consistently.
 
 import { useEffect, useRef, useState } from "react";
 
 import {
+  COMPOSITION_TEMPLATE,
+  step1GenerateRobot,
   step3PrepareLogo,
   step4Composite,
+  type Step1Result,
   type Step3LogoResult,
   type Step4CompositeResult,
   type Step4Settings,
@@ -34,6 +36,14 @@ import {
   type VisionTorsoResult,
 } from "../lib/vision-detection.js";
 import { formatError } from "./Home.js";
+
+const IMAGE_MODEL_CHOICES = [
+  { id: "image:imagen-4", label: "Imagen 4 (default)" },
+  { id: "image:imagen-3", label: "Imagen 3" },
+  { id: "image:nano-banana", label: "Nano Banana" },
+  { id: "image:flux-pro-1.1", label: "FLUX Pro 1.1" },
+] as const;
+type ImageModelChoice = (typeof IMAGE_MODEL_CHOICES)[number]["id"];
 
 const BLEND_MODES: GlobalCompositeOperation[] = [
   "multiply",
@@ -58,9 +68,33 @@ export function BrandedRobot() {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const brand: BrandProfile = TEST_COMPANIES[selectedIdx]!;
 
-  // --- Step 1 state (UPLOAD only — no generation) ---
+  // --- Step 1 state (Generate OR Upload) ---
+  const [step1Mode, setStep1Mode] = useState<"generate" | "upload">("generate");
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
+  const [generated, setGenerated] = useState<Step1Result | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [modelId, setModelId] = useState<ImageModelChoice>("image:imagen-4");
+  const [promptDraft, setPromptDraft] = useState<string>(brand.visualBrief);
+  const [promptEdited, setPromptEdited] = useState(false);
+  const [seedNonce, setSeedNonce] = useState(0);
   const [step1Error, setStep1Error] = useState<string | null>(null);
+
+  // The "active" canvas — comes from upload OR generate, whichever was
+  // the latest action.
+  const activeCanvas: HTMLCanvasElement | null =
+    step1Mode === "generate"
+      ? (generated?.rawCanvas ?? null)
+      : (uploaded?.canvas ?? null);
+  const activeDataUri: string | null =
+    step1Mode === "generate"
+      ? (generated?.rawDataUri ?? null)
+      : (uploaded?.dataUri ?? null);
+  const activeSize =
+    step1Mode === "generate" && generated
+      ? { width: generated.rawCanvas.width, height: generated.rawCanvas.height }
+      : uploaded
+        ? { width: uploaded.width, height: uploaded.height }
+        : null;
 
   // --- Step 2 state (Sonnet vision) ---
   const [step2Running, setStep2Running] = useState(false);
@@ -86,7 +120,7 @@ export function BrandedRobot() {
   const [step4Result, setStep4Result] = useState<Step4CompositeResult | null>(null);
   const step4DebounceRef = useRef<number | null>(null);
 
-  // Reset downstream when brand or upload changes.
+  // Reset downstream when the active image (or brand) changes.
   useEffect(() => {
     setVision(null);
     setStep3Result(null);
@@ -94,37 +128,43 @@ export function BrandedRobot() {
     setStep2Error(null);
     setStep3Error(null);
     setDebugOverlay(null);
-  }, [brand.name, uploaded]);
+  }, [brand.name, uploaded, generated]);
+
+  // Reset the editable prompt textarea when brand changes (unless edited).
+  useEffect(() => {
+    if (!promptEdited) {
+      setPromptDraft(brand.visualBrief);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brand.name]);
 
   // Auto-recomposite when inputs change.
   useEffect(() => {
-    if (!uploaded || !vision || !step3Result) return;
+    if (!activeCanvas || !activeSize || !activeDataUri || !vision || !step3Result) return;
     if (step4DebounceRef.current !== null) {
       window.clearTimeout(step4DebounceRef.current);
     }
     step4DebounceRef.current = window.setTimeout(() => {
       void (async () => {
         try {
-          // Synthesize the "robot" + "detection" shapes step4Composite expects.
           const r = await step4Composite({
             robot: {
-              prompt: "<uploaded>",
+              prompt: "<source>",
               rawBlob: new Blob(),
-              rawDataUri: uploaded.dataUri,
-              rawCanvas: uploaded.canvas,
+              rawDataUri: activeDataUri,
+              rawCanvas: activeCanvas,
               creditsSpent: 0,
             },
             detection: {
-              silhouetteCanvas: uploaded.canvas,
+              silhouetteCanvas: activeCanvas,
               bbox: {
                 left: 0, top: 0,
-                right: uploaded.width - 1, bottom: uploaded.height - 1,
-                width: uploaded.width, height: uploaded.height,
+                right: activeSize.width - 1, bottom: activeSize.height - 1,
+                width: activeSize.width, height: activeSize.height,
               },
               torso: {
                 centerX: vision.centerX,
                 centerY: vision.centerY,
-                // Use the smaller of width/height as the disc diameter.
                 diameter: Math.min(vision.maxLogoWidth, vision.maxLogoHeight),
               },
               torsoSource: "vision-sonnet" as never,
@@ -141,7 +181,7 @@ export function BrandedRobot() {
         }
       })();
     }, 80);
-  }, [uploaded, vision, step3Result, settings, debugOverlay]);
+  }, [activeCanvas, activeSize, activeDataUri, vision, step3Result, settings, debugOverlay]);
 
   const isAuthenticated = state.canSignAsOwner || state.delegates.length > 0;
   if (!isAuthenticated) {
@@ -190,21 +230,47 @@ export function BrandedRobot() {
     reader.readAsDataURL(file);
   };
 
+  const runStep1Generate = async () => {
+    setGenerating(true);
+    setStep1Error(null);
+    setGenerated(null);
+    try {
+      // We use a tiny shim brand override so the operator-edited textarea
+      // becomes the brand brief that composeFluxPrompt picks up.
+      const r = await step1GenerateRobot({
+        brand: { ...brand, visualBrief: promptDraft },
+        sdk,
+        model: modelId,
+        ...(seedNonce > 0 ? { seedOverride: (brand.seed ?? 0) + seedNonce } : {}),
+      });
+      setGenerated(r);
+    } catch (e) {
+      setStep1Error(formatError(e));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const resetPrompt = () => {
+    setPromptDraft(brand.visualBrief);
+    setPromptEdited(false);
+  };
+
   const runStep2 = async () => {
-    if (!uploaded) return;
+    if (!activeCanvas || !activeSize) return;
     setStep2Running(true);
     setStep2Error(null);
     setStep4Result(null);
     try {
-      const r = await detectTorsoByVision(sdk, uploaded.canvas);
+      const r = await detectTorsoByVision(sdk, activeCanvas);
       setVision(r);
       // Render the debug overlay: source image + chest center + max-logo rect
       const overlay = document.createElement("canvas");
-      overlay.width = uploaded.width;
-      overlay.height = uploaded.height;
+      overlay.width = activeSize.width;
+      overlay.height = activeSize.height;
       const ctx = overlay.getContext("2d");
       if (ctx) {
-        ctx.drawImage(uploaded.canvas, 0, 0);
+        ctx.drawImage(activeCanvas, 0, 0);
         // Max-logo rectangle (cyan, dashed-ish)
         ctx.strokeStyle = "rgba(0, 220, 255, 0.95)";
         ctx.lineWidth = 4;
@@ -309,60 +375,169 @@ export function BrandedRobot() {
         ))}
       </div>
 
-      {/* ============= Step 1 — UPLOAD ============= */}
+      {/* ============= Step 1 — Generate OR Upload ============= */}
       <section style={stepStyle}>
-        <h3>Step 1 — Upload an existing image</h3>
-        <p style={{ fontSize: "0.9em", color: "#555" }}>
-          Drop a PNG / JPEG you've already generated. No FLUX call, no
-          credit cost.
-        </p>
-        <label
-          className="row"
-          style={{
-            border: "1px dashed #888",
-            borderRadius: 8,
-            padding: 16,
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            cursor: "pointer",
-            marginBottom: 8,
-          }}
-        >
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onUpload(f);
-            }}
-            style={{ display: "none" }}
-          />
-          {uploaded ? (
-            <>
-              <img
-                src={uploaded.dataUri}
-                alt="uploaded"
-                style={{
-                  width: 80,
-                  height: 80,
-                  objectFit: "contain",
-                  background: "#f0f0f0",
-                  borderRadius: 4,
-                }}
-              />
-              <span>
-                <strong>Loaded</strong> ({uploaded.width} × {uploaded.height}{" "}
-                px) — click to replace
+        <h3>Step 1 — Source image</h3>
+
+        <div className="row" style={{ gap: 16, marginBottom: 12 }}>
+          <label>
+            <input
+              type="radio"
+              checked={step1Mode === "generate"}
+              onChange={() => setStep1Mode("generate")}
+            />{" "}
+            <strong>Generate</strong> (brand prompt + locked composition)
+          </label>
+          <label>
+            <input
+              type="radio"
+              checked={step1Mode === "upload"}
+              onChange={() => setStep1Mode("upload")}
+            />{" "}
+            <strong>Upload</strong> (re-use a PNG, no FLUX cost)
+          </label>
+        </div>
+
+        {step1Mode === "generate" && (
+          <>
+            <label style={{ display: "block", marginBottom: 8 }}>
+              <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+                Image model
               </span>
-            </>
-          ) : (
-            <span style={{ color: "#666" }}>
-              Click to pick an image (PNG, JPEG, or WebP)
-            </span>
-          )}
-        </label>
-        {step1Error && <div className="error">{step1Error}</div>}
+              <select
+                value={modelId}
+                onChange={(e) => setModelId(e.target.value as ImageModelChoice)}
+                disabled={generating}
+                style={{ minWidth: 280 }}
+              >
+                {IMAGE_MODEL_CHOICES.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+                Brand brief (per-brand, editable)
+                {promptEdited && <em style={{ color: "#a60", marginLeft: 8 }}>(edited)</em>}
+              </span>
+              <textarea
+                value={promptDraft}
+                onChange={(e) => {
+                  setPromptDraft(e.target.value);
+                  setPromptEdited(true);
+                }}
+                rows={12}
+                style={{
+                  width: "100%",
+                  fontFamily: "ui-monospace, monospace",
+                  fontSize: "0.82em",
+                  padding: 8,
+                  border: "1px solid #ccc",
+                  borderRadius: 4,
+                  resize: "vertical",
+                }}
+                disabled={generating}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75em", color: "#888", marginTop: 4 }}>
+                <span>{promptDraft.length} chars</span>
+                {promptEdited && (
+                  <button
+                    type="button"
+                    onClick={resetPrompt}
+                    style={{ background: "transparent", border: "none", color: "#06a", cursor: "pointer", fontSize: "0.75em", padding: 0 }}
+                  >
+                    Reset to brand default
+                  </button>
+                )}
+              </div>
+            </label>
+
+            <details style={{ marginBottom: 8 }}>
+              <summary style={{ cursor: "pointer", fontSize: "0.85em" }}>
+                View the locked composition template (appended automatically)
+              </summary>
+              <pre style={{ background: "#f7f7f7", padding: 8, borderRadius: 4, fontSize: "0.75em", whiteSpace: "pre-wrap", marginTop: 6 }}>
+                {COMPOSITION_TEMPLATE}
+              </pre>
+            </details>
+
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => void runStep1Generate()}
+                disabled={generating || !promptDraft.trim()}
+              >
+                {generating ? "Generating…" : generated ? "Generate" : "Generate robot"}
+              </button>
+              {generated && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSeedNonce((n) => n + 1);
+                    setTimeout(() => void runStep1Generate(), 0);
+                  }}
+                  disabled={generating}
+                >
+                  Regenerate (new seed)
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        {step1Mode === "upload" && (
+          <label
+            className="row"
+            style={{
+              border: "1px dashed #888",
+              borderRadius: 8,
+              padding: 16,
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              cursor: "pointer",
+              marginBottom: 8,
+            }}
+          >
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onUpload(f);
+              }}
+              style={{ display: "none" }}
+            />
+            {uploaded ? (
+              <>
+                <img
+                  src={uploaded.dataUri}
+                  alt="uploaded"
+                  style={{ width: 80, height: 80, objectFit: "contain", background: "#f0f0f0", borderRadius: 4 }}
+                />
+                <span>
+                  <strong>Loaded</strong> ({uploaded.width} × {uploaded.height} px) — click to replace
+                </span>
+              </>
+            ) : (
+              <span style={{ color: "#666" }}>Click to pick an image (PNG, JPEG, or WebP)</span>
+            )}
+          </label>
+        )}
+
+        {step1Error && <div className="error" style={{ marginTop: 8 }}>{step1Error}</div>}
+
+        {activeDataUri && (
+          <div style={{ marginTop: 12, maxWidth: 480 }}>
+            <img src={activeDataUri} alt="source" style={{ ...imgStyle, borderRadius: 6 }} />
+            {step1Mode === "generate" && generated && (
+              <p style={{ fontSize: "0.75em", color: "#666", marginTop: 4 }}>
+                {generated.creditsSpent.toLocaleString()} mc spent on this generation.
+              </p>
+            )}
+          </div>
+        )}
       </section>
 
       {/* ============= Step 2 — Sonnet vision ============= */}
