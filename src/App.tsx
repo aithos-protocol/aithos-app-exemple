@@ -7,6 +7,7 @@ import { Nav } from "./components/Nav.js";
 import { AuthCallback } from "./routes/AuthCallback.js";
 import { Compute } from "./routes/Compute.js";
 import { Home } from "./routes/Home.js";
+import { Image } from "./routes/Image.js";
 import { Mandates } from "./routes/Mandates.js";
 import { Profile } from "./routes/Profile.js";
 import { Wallet } from "./routes/Wallet.js";
@@ -23,6 +24,7 @@ export function App() {
           <Route path="/mandates" element={<Mandates />} />
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/compute" element={<Compute />} />
+          <Route path="/image" element={<Image />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
