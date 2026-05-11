@@ -412,19 +412,36 @@ export function renderTorsoDebugOverlay(
   source: HTMLCanvasElement,
   bbox: SilhouetteBox,
   torso: { centerX: number; centerY: number; diameter: number },
+  options: {
+    /** Florence-2 polygon (if provided, drawn as a magenta outline). */
+    readonly florencePolygon?: ReadonlyArray<{ readonly x: number; readonly y: number }>;
+  } = {},
 ): HTMLCanvasElement {
   const out = document.createElement("canvas");
   out.width = source.width;
   out.height = source.height;
   const ctx = out.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
-  // Draw the source as-is (with its background — typically the FLUX
-  // colored bg). No checker, since the final composite keeps the bg.
   ctx.drawImage(source, 0, 0);
-  // Silhouette bbox (green)
-  ctx.strokeStyle = "rgba(0, 220, 0, 0.9)";
-  ctx.lineWidth = 4;
-  ctx.strokeRect(bbox.left, bbox.top, bbox.width, bbox.height);
+  // Silhouette bbox (green) — only show if it's NOT the entire image
+  // (i.e. bg removal actually worked). When Florence is the source
+  // we don't really care about the silhouette bbox anymore.
+  if (bbox.width < source.width - 4 || bbox.height < source.height - 4) {
+    ctx.strokeStyle = "rgba(0, 220, 0, 0.9)";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(bbox.left, bbox.top, bbox.width, bbox.height);
+  }
+  // Florence-2 polygon (magenta) — the actual segmented region
+  if (options.florencePolygon && options.florencePolygon.length >= 3) {
+    ctx.strokeStyle = "rgba(255, 50, 200, 0.95)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    const pts = options.florencePolygon;
+    ctx.moveTo(pts[0]!.x, pts[0]!.y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
+    ctx.closePath();
+    ctx.stroke();
+  }
   // Logo target — circle + crosshair (red)
   ctx.strokeStyle = "rgba(255, 50, 50, 1)";
   ctx.lineWidth = 5;

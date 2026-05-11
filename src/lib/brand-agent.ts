@@ -215,6 +215,8 @@ export interface Step2DetectArgs {
   readonly brand: BrandProfile;
   /** The canvas returned by Step 1. */
   readonly rawCanvas: HTMLCanvasElement;
+  /** SDK instance — needed for the Florence-2 segmentation call. */
+  readonly sdk: AithosSDK;
 }
 
 export interface Step2DetectResult {
@@ -230,13 +232,16 @@ export interface Step2DetectResult {
   readonly torso: { centerX: number; centerY: number; diameter: number };
   /** Which detection strategy chose the final position. */
   readonly torsoSource:
+    | "florence-2"
     | "pose-landmarker"
     | "color-match"
     | "silhouette-width"
     | "bbox-heuristic";
   /** Full pose result if MediaPipe ran successfully. */
   readonly pose: PoseTorsoResult | null;
-  /** Debug overlay (skeleton + bbox + crosshair) painted on the raw image. */
+  /** Florence-2 polygon if the API call succeeded (for the debug overlay). */
+  readonly florencePolygon: ReadonlyArray<{ readonly x: number; readonly y: number }> | null;
+  /** Debug overlay (Florence polygon / skeleton / bbox + crosshair) painted on the raw image. */
   readonly debugOverlayDataUri: string;
 }
 
@@ -249,7 +254,7 @@ export interface Step2DetectResult {
 export async function step2DetectTorso(
   args: Step2DetectArgs,
 ): Promise<Step2DetectResult> {
-  const { brand, rawCanvas } = args;
+  const { brand, rawCanvas, sdk } = args;
 
   // Silhouette canvas = rawCanvas with bg flooded to alpha=0. Used
   // for detection only — composite still uses rawCanvas.
@@ -296,7 +301,63 @@ export async function step2DetectTorso(
   let torso: { centerX: number; centerY: number; diameter: number };
   let torsoSource: Step2DetectResult["torsoSource"];
   let pose: PoseTorsoResult | null = null;
+  let florencePolygon: ReadonlyArray<{ x: number; y: number }> | null = null;
 
+  // 1. Florence-2 (PRIMARY) — text-prompted segmentation, works on cartoons + photos.
+  try {
+    console.log("[brand-agent] calling Florence-2 segmentation…");
+    const blob = await canvasToBlob(rawCanvas);
+    const t0 = performance.now();
+    // Cast: invokeSegmentation landed in @aithos/sdk alpha.18.
+    // Installed @aithos/sdk may still be alpha.17 until `pnpm install`.
+    const computeNs = sdk.compute as unknown as {
+      invokeSegmentation(args: {
+        image: Blob;
+        textInput: string;
+      }): Promise<{
+        polygons: ReadonlyArray<{ points: ReadonlyArray<{ x: number; y: number }> }>;
+        bbox: { left: number; top: number; right: number; bottom: number } | null;
+      }>;
+    };
+    const seg = await computeNs.invokeSegmentation({
+      image: blob,
+      textInput: "the torso and chest of the robot character",
+    });
+    console.log(
+      `[brand-agent] Florence-2 returned ${seg.polygons.length} polygon(s) in ${(performance.now() - t0).toFixed(0)}ms`,
+    );
+    if (seg.polygons.length > 0 && seg.bbox) {
+      florencePolygon = seg.polygons[0]!.points;
+      const cx = Math.round((seg.bbox.left + seg.bbox.right) / 2);
+      const cy = Math.round((seg.bbox.top + seg.bbox.bottom) / 2);
+      const w = seg.bbox.right - seg.bbox.left;
+      const h = seg.bbox.bottom - seg.bbox.top;
+      const diameter = Math.round(Math.min(w, h) * 0.5);
+      torso = { centerX: cx, centerY: cy, diameter };
+      torsoSource = "florence-2";
+      console.log("[brand-agent] ✅ using florence-2", { torso, bbox: seg.bbox });
+      // Skip remaining cascade — Florence-2 is reliable.
+      // florencePolygon is guaranteed non-null here (we just set it).
+      const debugOverlay = renderTorsoDebugOverlay(rawCanvas, bbox, torso, {
+        florencePolygon: florencePolygon ?? undefined,
+      });
+      const debugOverlayDataUri = canvasToDataUri(debugOverlay);
+      return {
+        silhouetteCanvas,
+        bbox,
+        torso,
+        torsoSource,
+        pose: null,
+        florencePolygon,
+        debugOverlayDataUri,
+      };
+    }
+    console.warn("[brand-agent] Florence-2 returned no polygons, falling through");
+  } catch (e) {
+    console.warn("[brand-agent] Florence-2 call failed, falling through", e);
+  }
+
+  // 2. MediaPipe Pose (fallback for human photos where Florence isn't great)
   try {
     pose = await detectTorsoByPose(rawCanvas);
   } catch (e) {
@@ -366,6 +427,7 @@ export async function step2DetectTorso(
     torso,
     torsoSource,
     pose,
+    florencePolygon,
     debugOverlayDataUri,
   };
 }

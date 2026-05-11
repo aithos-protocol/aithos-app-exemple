@@ -183,6 +183,7 @@ export function BrandedRobot() {
       const r = await step2DetectTorso({
         brand,
         rawCanvas: step1Result.rawCanvas,
+        sdk,
       });
       setStep2Result(r);
     } catch (e) {
