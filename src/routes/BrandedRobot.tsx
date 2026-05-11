@@ -1,43 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// /branded-robot — 3-step interactive pipeline.
+// /branded-robot — 4-step interactive pipeline (v8).
 //
-// Each step is independently re-runnable so we can debug the visual
-// pipeline without paying the FLUX cost on every iteration. Step 3
-// (composite) re-renders live as the user moves sliders — no extra
-// API calls.
+//   Step 1 — Generate robot
+//     - Editable prompt textarea (pre-filled from the brand profile)
+//     - Image model picker (Imagen 4 default, others available)
+//     - Output: raw model image only — no detection runs here
 //
-//   Step 1: Generate robot
-//     - calls FLUX with the brand-derived prompt
-//     - removes the background by flood-fill
-//     - detects the torso (colour-match preferred, bbox fallback)
-//     - shows the raw FLUX output AND the silhouette with a torso
-//       crosshair overlay so the operator can sanity-check
-//     - "Regenerate" bumps the seed for a fresh result
+//   Step 2 — Detect torso  (NEW manual trigger)
+//     - Bg removal + MediaPipe Pose + debug overlay
+//     - Output: silhouette bbox, torso center, suggested diameter
 //
-//   Step 2: Prepare logo
-//     - loads the brand's logo from its data URI
-//     - if no alpha, runs corner-flood-fill to force transparency
-//     - shows original vs processed side by side
+//   Step 3 — Prepare logo
+//   Step 4 — Composite (live)
 //
-//   Step 3: Composite (live)
-//     - canvas blend with controls: blend mode, opacity, fill ratio,
-//       X/Y offset, shadow
-//     - download the final PNG
+// Each step is independently re-runnable so the operator can iterate
+// on the prompt (Step 1) without re-paying the FLUX cost, and tweak
+// the composite (Step 4) without re-running detection.
 
 import { useEffect, useRef, useState } from "react";
 
 import {
+  composeFluxPrompt,
   pickBlendMode,
   pickTorsoColor,
   step1GenerateRobot,
-  step2PrepareLogo,
-  step3Composite,
+  step2DetectTorso,
+  step3PrepareLogo,
+  step4Composite,
   type Step1Result,
-  type Step2Result,
-  type Step3Result,
-  type Step3Settings,
+  type Step2DetectResult,
+  type Step3LogoResult,
+  type Step4CompositeResult,
+  type Step4Settings,
 } from "../lib/brand-agent.js";
 import type { BrandProfile } from "../lib/brand-types.js";
 import { TEST_COMPANIES } from "../lib/test-companies.js";
@@ -74,19 +70,23 @@ export function BrandedRobot() {
   const [step1Error, setStep1Error] = useState<string | null>(null);
   const [seedNonce, setSeedNonce] = useState(0);
   const [modelId, setModelId] = useState<ImageModelChoice>("image:imagen-4");
+  // Editable prompt textarea — initialised from composeFluxPrompt(brand),
+  // resync'd when the brand changes UNLESS the user has been editing.
+  const [promptDraft, setPromptDraft] = useState<string>(() => composeFluxPrompt(brand));
+  const [promptEdited, setPromptEdited] = useState(false);
 
-  // --- Step 2 state ---
+  // --- Step 2 state (NEW — manual detection) ---
   const [step2Running, setStep2Running] = useState(false);
-  const [step2Result, setStep2Result] = useState<Step2Result | null>(null);
+  const [step2Result, setStep2Result] = useState<Step2DetectResult | null>(null);
   const [step2Error, setStep2Error] = useState<string | null>(null);
 
-  // --- Step 3 state ---
-  // fillRatio defaults to 0.95 — the detector now returns a diameter
-  // that already has ~25% margin inside the chest plate (50% of the
-  // chest plate's smaller dimension), so the logo fills 95% of THAT
-  // already-margined disc. Net effect: logo occupies ~47% of the
-  // chest plate, leaving comfortable breathing room on all sides.
-  const [settings, setSettings] = useState<Step3Settings>({
+  // --- Step 3 state (logo) ---
+  const [step3Running, setStep3Running] = useState(false);
+  const [step3Result, setStep3Result] = useState<Step3LogoResult | null>(null);
+  const [step3Error, setStep3Error] = useState<string | null>(null);
+
+  // --- Step 4 state (composite — live re-renders on slider change) ---
+  const [settings, setSettings] = useState<Step4Settings>({
     blendMode: "multiply",
     opacity: 1.0,
     fillRatio: 0.95,
@@ -95,54 +95,58 @@ export function BrandedRobot() {
     offsetX: 0,
     offsetY: 0,
   });
-  const [step3Result, setStep3Result] = useState<Step3Result | null>(null);
-  const step3DebounceRef = useRef<number | null>(null);
+  const [step4Result, setStep4Result] = useState<Step4CompositeResult | null>(null);
+  const step4DebounceRef = useRef<number | null>(null);
 
-  // Reset all downstream state when the brand changes
+  // Reset downstream state + reset the prompt textarea when the brand
+  // changes — unless the user has edited the prompt in which case
+  // we preserve their text (they'll reset manually if they want).
   useEffect(() => {
     setStep1Result(null);
     setStep2Result(null);
     setStep3Result(null);
+    setStep4Result(null);
     setStep1Error(null);
     setStep2Error(null);
-    // Default the blend mode to whatever the brand suggests
+    setStep3Error(null);
+    if (!promptEdited) {
+      setPromptDraft(composeFluxPrompt(brand));
+    }
     setSettings((s) => ({ ...s, blendMode: pickBlendMode(brand) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand.name]);
 
-  const isAuthenticated =
-    state.canSignAsOwner || state.delegates.length > 0;
-
-  // Auto re-composite when step3 inputs change (debounced)
+  // Auto re-composite Step 4 when any input changes (debounced).
   useEffect(() => {
-    if (!step1Result || !step2Result) return;
-    if (step3DebounceRef.current !== null) {
-      window.clearTimeout(step3DebounceRef.current);
+    if (!step1Result || !step2Result || !step3Result) return;
+    if (step4DebounceRef.current !== null) {
+      window.clearTimeout(step4DebounceRef.current);
     }
-    step3DebounceRef.current = window.setTimeout(() => {
+    step4DebounceRef.current = window.setTimeout(() => {
       void (async () => {
         try {
-          const r = await step3Composite({
+          const r = await step4Composite({
             robot: step1Result,
-            logo: step2Result,
+            detection: step2Result,
+            logo: step3Result,
             settings,
           });
-          setStep3Result(r);
+          setStep4Result(r);
         } catch (e) {
-          // composite errors are rare — keep quiet, the next change will retry
-          console.warn("step3 composite failed", e);
+          console.warn("step4 composite failed", e);
         }
       })();
     }, 80);
-  }, [step1Result, step2Result, settings]);
+  }, [step1Result, step2Result, step3Result, settings]);
 
+  const isAuthenticated = state.canSignAsOwner || state.delegates.length > 0;
   if (!isAuthenticated) {
     return (
       <section>
-        <h2>Branded robot — 3-step pipeline</h2>
+        <h2>Branded robot — 4-step pipeline</h2>
         <p className="lede">
-          Sign in as an owner first so the agent can spend your wallet
-          on the FLUX call.
+          Sign in as an owner first so the agent can spend your wallet on
+          the image-model call.
         </p>
       </section>
     );
@@ -151,13 +155,15 @@ export function BrandedRobot() {
   const runStep1 = async () => {
     setStep1Running(true);
     setStep1Error(null);
-    setStep3Result(null);
+    // Step 1 invalidates downstream steps
+    setStep2Result(null);
+    setStep4Result(null);
     try {
       const r = await step1GenerateRobot({
         brand,
         sdk,
         model: modelId,
-        // Each "Regenerate" bumps the seed so the model gives a fresh result
+        promptOverride: promptDraft,
         ...(seedNonce > 0 ? { seedOverride: (brand.seed ?? 0) + seedNonce } : {}),
       });
       setStep1Result(r);
@@ -169,11 +175,15 @@ export function BrandedRobot() {
   };
 
   const runStep2 = async () => {
+    if (!step1Result) return;
     setStep2Running(true);
     setStep2Error(null);
-    setStep3Result(null);
+    setStep4Result(null);
     try {
-      const r = await step2PrepareLogo({ brand });
+      const r = await step2DetectTorso({
+        brand,
+        rawCanvas: step1Result.rawCanvas,
+      });
       setStep2Result(r);
     } catch (e) {
       setStep2Error(formatError(e));
@@ -182,13 +192,32 @@ export function BrandedRobot() {
     }
   };
 
+  const runStep3 = async () => {
+    setStep3Running(true);
+    setStep3Error(null);
+    setStep4Result(null);
+    try {
+      const r = await step3PrepareLogo({ brand });
+      setStep3Result(r);
+    } catch (e) {
+      setStep3Error(formatError(e));
+    } finally {
+      setStep3Running(false);
+    }
+  };
+
+  const resetPrompt = () => {
+    setPromptDraft(composeFluxPrompt(brand));
+    setPromptEdited(false);
+  };
+
   return (
     <section>
-      <h2>Branded robot — 3-step pipeline</h2>
+      <h2>Branded robot — 4-step pipeline</h2>
       <p className="lede">
-        Each step can be re-run independently for debugging. Step 3
-        (composite) updates live as you move the sliders — no extra
-        FLUX call.
+        Each step is independently re-runnable. Edit the prompt in
+        Step 1 to iterate on the visual style without re-running pose
+        detection — Step 2 is now a separate manual trigger.
       </p>
 
       <h3 style={{ marginTop: 16 }}>Brand brief</h3>
@@ -232,9 +261,7 @@ export function BrandedRobot() {
               />
               <div>
                 <strong style={{ fontSize: "1em" }}>{c.name}</strong>
-                <div style={{ fontSize: "0.85em", marginTop: 4 }}>
-                  {c.service}
-                </div>
+                <div style={{ fontSize: "0.85em", marginTop: 4 }}>{c.service}</div>
                 <div
                   style={{
                     fontSize: "0.75em",
@@ -252,15 +279,14 @@ export function BrandedRobot() {
         ))}
       </div>
 
-      {/* ============= Step 1 ============= */}
+      {/* ============= Step 1 — Generate robot ============= */}
       <section style={stepStyle}>
         <h3>Step 1 — Generate robot</h3>
         <p style={{ fontSize: "0.9em", color: "#555" }}>
-          Calls the chosen image model with the brand-derived prompt,
-          removes the background, and detects the torso center via
-          MediaPipe Pose. Hit <strong>Regenerate</strong> to bump the
-          seed and try a different result.
+          Calls the image model with the prompt below. Edit the prompt
+          to iterate on the style — each call costs ~40 000 mc.
         </p>
+
         <label style={{ display: "block", marginBottom: 8 }}>
           <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
             Image model
@@ -278,11 +304,63 @@ export function BrandedRobot() {
             ))}
           </select>
         </label>
+
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+            Prompt {promptEdited && <em style={{ color: "#a60" }}>(edited)</em>}
+          </span>
+          <textarea
+            value={promptDraft}
+            onChange={(e) => {
+              setPromptDraft(e.target.value);
+              setPromptEdited(true);
+            }}
+            rows={10}
+            style={{
+              width: "100%",
+              fontFamily: "ui-monospace, monospace",
+              fontSize: "0.85em",
+              padding: 8,
+              border: "1px solid #ccc",
+              borderRadius: 4,
+              resize: "vertical",
+            }}
+            disabled={step1Running}
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: "0.75em",
+              color: "#888",
+              marginTop: 4,
+            }}
+          >
+            <span>{promptDraft.length} chars</span>
+            {promptEdited && (
+              <button
+                type="button"
+                onClick={resetPrompt}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#06a",
+                  cursor: "pointer",
+                  fontSize: "0.75em",
+                  padding: 0,
+                }}
+              >
+                Reset to brand-derived prompt
+              </button>
+            )}
+          </div>
+        </label>
+
         <div className="row" style={{ gap: 8 }}>
           <button
             type="button"
             onClick={() => void runStep1()}
-            disabled={step1Running}
+            disabled={step1Running || !promptDraft.trim()}
           >
             {step1Running
               ? "Generating…"
@@ -303,89 +381,87 @@ export function BrandedRobot() {
             </button>
           )}
         </div>
+
         {step1Error && <div className="error" style={{ marginTop: 8 }}>{step1Error}</div>}
         {step1Result && (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 12,
-              marginTop: 12,
-            }}
-          >
-            <figure style={{ margin: 0 }}>
-              <figcaption style={figcapStyle}>
-                Raw FLUX output (original background)
-              </figcaption>
-              <img src={step1Result.rawDataUri} alt="raw flux" style={imgStyle} />
-            </figure>
-            <figure style={{ margin: 0 }}>
-              <figcaption style={figcapStyle}>
-                Pose + torso target ({step1Result.torsoSource}
-                {step1Result.pose &&
-                  ` — hipsVisible=${step1Result.pose.hipsVisible}`}
-                )
-              </figcaption>
-              <img
-                src={step1Result.debugOverlayDataUri}
-                alt="pose debug"
-                style={imgStyle}
-              />
-            </figure>
+          <div style={{ marginTop: 12, maxWidth: 480 }}>
+            <img
+              src={step1Result.rawDataUri}
+              alt="raw robot"
+              style={{ ...imgStyle, borderRadius: 6 }}
+            />
+            <p style={{ fontSize: "0.75em", color: "#666", marginTop: 4 }}>
+              Credits spent: {step1Result.creditsSpent.toLocaleString()} mc
+            </p>
           </div>
-        )}
-        {step1Result && (
-          <details style={{ marginTop: 8 }}>
-            <summary style={{ cursor: "pointer", fontSize: "0.85em" }}>
-              View the FLUX prompt + detection details
-            </summary>
-            <pre
-              style={{
-                background: "#f7f7f7",
-                padding: 8,
-                borderRadius: 4,
-                fontSize: "0.8em",
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {step1Result.prompt}
-            </pre>
-            <dl className="kvtable">
-              <dt>Torso center</dt>
-              <dd>
-                ({step1Result.torso.centerX}, {step1Result.torso.centerY})
-              </dd>
-              <dt>Torso diameter</dt>
-              <dd>{step1Result.torso.diameter}px</dd>
-              <dt>Silhouette bbox</dt>
-              <dd>
-                ({step1Result.bbox.left}, {step1Result.bbox.top}) → (
-                {step1Result.bbox.right}, {step1Result.bbox.bottom})
-              </dd>
-              <dt>Credits spent</dt>
-              <dd>{step1Result.creditsSpent.toLocaleString()} mc</dd>
-            </dl>
-          </details>
         )}
       </section>
 
-      {/* ============= Step 2 ============= */}
+      {/* ============= Step 2 — Detect torso (NEW) ============= */}
       <section style={stepStyle}>
-        <h3>Step 2 — Prepare logo</h3>
+        <h3>Step 2 — Detect torso</h3>
         <p style={{ fontSize: "0.9em", color: "#555" }}>
-          Loads the brand logo and forces it transparent if needed
-          (PNG with a coloured background → flood-fill on the corner
-          colour; SVG / already-alpha → pass-through).
+          Removes the background, runs MediaPipe Pose, and computes the
+          logo target position + size. {step1Result ? "" : "Run Step 1 first."}
         </p>
         <button
           type="button"
           onClick={() => void runStep2()}
-          disabled={step2Running}
+          disabled={!step1Result || step2Running}
         >
-          {step2Running ? "Processing…" : step2Result ? "Re-process" : "Process logo"}
+          {step2Running
+            ? "Detecting…"
+            : step2Result
+              ? "Re-detect"
+              : "Detect torso"}
         </button>
         {step2Error && <div className="error" style={{ marginTop: 8 }}>{step2Error}</div>}
         {step2Result && (
+          <>
+            <div style={{ marginTop: 12, maxWidth: 480 }}>
+              <img
+                src={step2Result.debugOverlayDataUri}
+                alt="pose debug"
+                style={{ ...imgStyle, borderRadius: 6 }}
+              />
+            </div>
+            <dl className="kvtable" style={{ marginTop: 8, fontSize: "0.85em" }}>
+              <dt>Strategy</dt>
+              <dd>
+                {step2Result.torsoSource}
+                {step2Result.pose && ` (hipsVisible=${step2Result.pose.hipsVisible})`}
+              </dd>
+              <dt>Robot bbox</dt>
+              <dd>
+                ({step2Result.bbox.left}, {step2Result.bbox.top}) →{" "}
+                ({step2Result.bbox.right}, {step2Result.bbox.bottom}) —{" "}
+                {step2Result.bbox.width}×{step2Result.bbox.height}px
+              </dd>
+              <dt>Logo target</dt>
+              <dd>
+                center ({step2Result.torso.centerX}, {step2Result.torso.centerY}),
+                diameter {step2Result.torso.diameter}px
+              </dd>
+            </dl>
+          </>
+        )}
+      </section>
+
+      {/* ============= Step 3 — Prepare logo ============= */}
+      <section style={stepStyle}>
+        <h3>Step 3 — Prepare logo</h3>
+        <p style={{ fontSize: "0.9em", color: "#555" }}>
+          Loads the brand's logo and forces transparency if needed.
+        </p>
+        <button
+          type="button"
+          onClick={() => void runStep3()}
+          disabled={step3Running}
+        >
+          {step3Running ? "Processing…" : step3Result ? "Re-process" : "Process logo"}
+        </button>
+        {step3Error && <div className="error" style={{ marginTop: 8 }}>{step3Error}</div>}
+        {step3Result && (
           <div
             style={{
               display: "grid",
@@ -397,7 +473,7 @@ export function BrandedRobot() {
             <figure style={{ margin: 0 }}>
               <figcaption style={figcapStyle}>Original</figcaption>
               <img
-                src={step2Result.originalDataUri}
+                src={step3Result.originalDataUri}
                 alt="original logo"
                 style={{ ...imgStyle, background: "#fff" }}
               />
@@ -405,11 +481,11 @@ export function BrandedRobot() {
             <figure style={{ margin: 0 }}>
               <figcaption style={figcapStyle}>
                 Processed (transparent){" "}
-                {step2Result.bgWasRemoved &&
-                  `— removed ${step2Result.detectedCornerHex}`}
+                {step3Result.bgWasRemoved &&
+                  `— removed ${step3Result.detectedCornerHex}`}
               </figcaption>
               <img
-                src={step2Result.processedDataUri}
+                src={step3Result.processedDataUri}
                 alt="processed logo"
                 style={{ ...imgStyle, ...checkerBgStyle }}
               />
@@ -418,29 +494,27 @@ export function BrandedRobot() {
         )}
       </section>
 
-      {/* ============= Step 3 ============= */}
+      {/* ============= Step 4 — Composite (live) ============= */}
       <section style={stepStyle}>
-        <h3>Step 3 — Composite</h3>
+        <h3>Step 4 — Composite</h3>
         <p style={{ fontSize: "0.9em", color: "#555" }}>
-          {!step1Result || !step2Result
-            ? "Run steps 1 and 2 first."
-            : "Sliders re-render the composite live (no extra FLUX call)."}
+          {!step1Result || !step2Result || !step3Result
+            ? "Run steps 1, 2 and 3 first."
+            : "Sliders re-render the composite live."}
         </p>
-        {step1Result && step2Result && (
+        {step1Result && step2Result && step3Result && (
           <>
-            <Step3Controls settings={settings} onChange={setSettings} />
-            {step3Result && (
+            <Step4Controls settings={settings} onChange={setSettings} />
+            {step4Result && (
               <div style={{ marginTop: 12, maxWidth: 520 }}>
-                <div style={checkerBgStyle}>
-                  <img
-                    src={step3Result.dataUri}
-                    alt="final composite"
-                    style={{ width: "100%", height: "auto", display: "block" }}
-                  />
-                </div>
+                <img
+                  src={step4Result.dataUri}
+                  alt="final composite"
+                  style={{ width: "100%", height: "auto", display: "block", borderRadius: 6 }}
+                />
                 <div className="row" style={{ gap: 8, marginTop: 8 }}>
                   <a
-                    href={step3Result.dataUri}
+                    href={step4Result.dataUri}
                     download={`${brand.name.toLowerCase().replace(/\W+/g, "-")}-mascot.png`}
                   >
                     Download PNG
@@ -459,14 +533,14 @@ export function BrandedRobot() {
 /*  Sub-components                                                            */
 /* -------------------------------------------------------------------------- */
 
-function Step3Controls({
+function Step4Controls({
   settings,
   onChange,
 }: {
-  readonly settings: Step3Settings;
-  readonly onChange: (s: Step3Settings) => void;
+  readonly settings: Step4Settings;
+  readonly onChange: (s: Step4Settings) => void;
 }) {
-  const update = <K extends keyof Step3Settings>(key: K, value: Step3Settings[K]) =>
+  const update = <K extends keyof Step4Settings>(key: K, value: Step4Settings[K]) =>
     onChange({ ...settings, [key]: value });
 
   return (
@@ -485,9 +559,7 @@ function Step3Controls({
         </select>
       </label>
       <label>
-        <span>
-          Opacity — {((settings.opacity ?? 1) * 100).toFixed(0)}%
-        </span>
+        <span>Opacity — {((settings.opacity ?? 1) * 100).toFixed(0)}%</span>
         <input
           type="range"
           min={0.1}
@@ -499,9 +571,7 @@ function Step3Controls({
         />
       </label>
       <label>
-        <span>
-          Fill ratio — {((settings.fillRatio ?? 1) * 100).toFixed(0)}% of disc
-        </span>
+        <span>Fill ratio — {((settings.fillRatio ?? 1) * 100).toFixed(0)}%</span>
         <input
           type="range"
           min={0.3}
@@ -583,7 +653,6 @@ const imgStyle: React.CSSProperties = {
   width: "100%",
   height: "auto",
   display: "block",
-  borderRadius: 4,
 };
 
 const checkerBgStyle: React.CSSProperties = {
