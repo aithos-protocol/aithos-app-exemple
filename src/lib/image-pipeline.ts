@@ -265,19 +265,18 @@ export function detectTorsoByColor(
   torsoHex: string,
   opts: {
     readonly tolerance?: number;
-    /**
-     * Search only within these y bounds. CRITICAL for accuracy: if
-     * left unset, the head's bright highlights (lens flares, antenna
-     * tips, edge specular) can be brighter than the torso area and
-     * skew the centroid up to the head. Callers should pass the
-     * lower half of the silhouette bbox here.
-     */
     readonly yMin?: number;
     readonly yMax?: number;
-    /** Min pixel count to consider the detection trustworthy. */
     readonly minPixels?: number;
   } = {},
-): { centerX: number; centerY: number; diameter: number; pixelCount: number } | null {
+): {
+  centerX: number;
+  centerY: number;
+  diameter: number;
+  pixelCount: number;
+  /** Bounding box of the matched pixels. */
+  bbox: { left: number; right: number; top: number; bottom: number };
+} | null {
   const tolerance = opts.tolerance ?? 32;
   const minPixels = opts.minPixels ?? 200;
   const ctx = canvas.getContext("2d");
@@ -292,44 +291,45 @@ export function detectTorsoByColor(
   const yMax = Math.min(h, Math.ceil(opts.yMax ?? h));
   const xs: number[] = [];
   const ys: number[] = [];
+  let bboxLeft = xMax;
+  let bboxRight = xMin;
+  let bboxTop = yMax;
+  let bboxBottom = yMin;
   for (let y = yMin; y < yMax; y++) {
     for (let x = xMin; x < xMax; x++) {
       const i = (y * w + x) * 4;
-      if (data[i + 3]! < 200) continue; // not opaque
+      if (data[i + 3]! < 200) continue;
       const dr = data[i]! - ref.r;
       const dg = data[i + 1]! - ref.g;
       const db = data[i + 2]! - ref.b;
       if (dr * dr + dg * dg + db * db > tol2) continue;
       xs.push(x);
       ys.push(y);
+      if (x < bboxLeft) bboxLeft = x;
+      if (x > bboxRight) bboxRight = x;
+      if (y < bboxTop) bboxTop = y;
+      if (y > bboxBottom) bboxBottom = y;
     }
   }
   if (xs.length < minPixels) return null;
-  // Centroid
-  let sx = 0;
-  let sy = 0;
-  for (let k = 0; k < xs.length; k++) {
-    sx += xs[k]!;
-    sy += ys[k]!;
-  }
-  const cx = sx / xs.length;
-  const cy = sy / ys.length;
-  // Mean distance from centroid → disc radius
-  let sumDist = 0;
-  for (let k = 0; k < xs.length; k++) {
-    const dx = xs[k]! - cx;
-    const dy = ys[k]! - cy;
-    sumDist += Math.sqrt(dx * dx + dy * dy);
-  }
-  const meanDist = sumDist / xs.length;
-  // Diameter = 2 * (1.4 * meanDist) — gives a disc that comfortably
-  // fits within the t-shirt panel without overflowing.
-  const diameter = Math.round(2 * 1.4 * meanDist);
+  // BBOX-CENTER (not centroid) — pixel density is uneven (the chest
+  // plate may be wider at the bottom than at the top), so the
+  // centroid of all matching pixels is biased. The geometric centre
+  // of the bbox is the true visual centre of the chest plate.
+  const cx = Math.round((bboxLeft + bboxRight) / 2);
+  const cy = Math.round((bboxTop + bboxBottom) / 2);
+  const bboxW = bboxRight - bboxLeft + 1;
+  const bboxH = bboxBottom - bboxTop + 1;
+  // Diameter = ~50% of the SMALLER of the chest plate's dimensions.
+  // That gives a logo that sits comfortably inside the plate with
+  // roughly 25% margin on the tighter axis.
+  const diameter = Math.round(Math.min(bboxW, bboxH) * 0.50);
   return {
-    centerX: Math.round(cx),
-    centerY: Math.round(cy),
+    centerX: cx,
+    centerY: cy,
     diameter,
     pixelCount: xs.length,
+    bbox: { left: bboxLeft, right: bboxRight, top: bboxTop, bottom: bboxBottom },
   };
 }
 
@@ -418,24 +418,15 @@ export function renderTorsoDebugOverlay(
   out.height = source.height;
   const ctx = out.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
-  // Checker background so transparent pixels are visible
-  ctx.fillStyle = "#eaeaea";
-  ctx.fillRect(0, 0, out.width, out.height);
-  const checkerSize = 16;
-  ctx.fillStyle = "#fafafa";
-  for (let y = 0; y < out.height; y += checkerSize * 2) {
-    for (let x = 0; x < out.width; x += checkerSize * 2) {
-      ctx.fillRect(x, y, checkerSize, checkerSize);
-      ctx.fillRect(x + checkerSize, y + checkerSize, checkerSize, checkerSize);
-    }
-  }
+  // Draw the source as-is (with its background — typically the FLUX
+  // colored bg). No checker, since the final composite keeps the bg.
   ctx.drawImage(source, 0, 0);
-  // Bbox (green)
-  ctx.strokeStyle = "rgba(0, 180, 0, 0.9)";
+  // Silhouette bbox (green)
+  ctx.strokeStyle = "rgba(0, 220, 0, 0.9)";
   ctx.lineWidth = 4;
   ctx.strokeRect(bbox.left, bbox.top, bbox.width, bbox.height);
-  // Torso center + circle (red)
-  ctx.strokeStyle = "rgba(220, 30, 30, 0.95)";
+  // Logo target — circle + crosshair (red)
+  ctx.strokeStyle = "rgba(255, 50, 50, 1)";
   ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.arc(torso.centerX, torso.centerY, torso.diameter / 2, 0, Math.PI * 2);

@@ -72,12 +72,17 @@ export function BrandedRobot() {
   const [step2Error, setStep2Error] = useState<string | null>(null);
 
   // --- Step 3 state ---
+  // fillRatio defaults to 0.95 — the detector now returns a diameter
+  // that already has ~25% margin inside the chest plate (50% of the
+  // chest plate's smaller dimension), so the logo fills 95% of THAT
+  // already-margined disc. Net effect: logo occupies ~47% of the
+  // chest plate, leaving comfortable breathing room on all sides.
   const [settings, setSettings] = useState<Step3Settings>({
     blendMode: "multiply",
-    opacity: 0.92,
-    fillRatio: 0.88,
-    shadowBlur: 6,
-    shadowColor: "rgba(0,0,0,0.20)",
+    opacity: 1.0,
+    fillRatio: 0.95,
+    shadowBlur: 4,
+    shadowColor: "rgba(0,0,0,0.15)",
     offsetX: 0,
     offsetY: 0,
   });

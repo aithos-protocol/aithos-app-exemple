@@ -61,26 +61,27 @@ export function pickBlendMode(brand: BrandProfile): "multiply" | "screen" {
 
 /**
  * Translate a brand profile into a FLUX prompt that produces a
- * CLASSIC METAL ROBOT MASCOT — upper-body portrait, polished metal
- * construction, with a clean uniform METALLIC CHEST PLATE in the
- * centre of the torso (the logo drop zone).
+ * SMOOTH FLAT 2D BRAND MASCOT — clean isometric-illustration style
+ * with a visible blank chest plate where the agent will paint the
+ * logo. Style reference: Aithos Builder mascot — friendly, modern,
+ * vector-clean, NOT photorealistic, NOT industrial.
  *
  * Key insights from iteration:
  *
- * - Positive descriptions stick FAR better than negations. Describing
- *   the chest plate as "smooth polished plain metal panel" works;
- *   "no chest emblem" alone gets ignored.
+ * - "Flat 2D cartoon illustration / isometric character art" is the
+ *   sweet spot. Words like "metal construction" send FLUX into
+ *   photorealistic territory; "flat / illustration / vector" keeps
+ *   it in mascot territory.
  *
- * - Upper-body crop is essential for branding — gives a tight portrait
- *   with the chest unmistakably in frame. Whole-body shots place the
- *   chest too high in the silhouette and waste visual space on legs.
+ * - "BUST PORTRAIT" cropping gives a tight head-and-chest frame —
+ *   essentially the brand-profile shape. Full-body shots waste
+ *   half the canvas on legs and place the chest too high.
  *
- * - The chest plate colour is the LIGHTER of primary/secondary so the
- *   logo (in the darker brand colour) lands with contrast.
+ * - The chest plate colour is the LIGHTER of primary/secondary so
+ *   the logo (in the darker brand colour) has contrast.
  *
- * - Strong colour qualifiers ("pristine bright pure", "rich vivid")
- *   help FLUX honour the requested colour against the brand's mood
- *   words ("cool", "warm") which otherwise hijack the palette.
+ * - Coloured background with a soft halo behind the robot reads as
+ *   "modern brand mascot" rather than "cut-out sticker".
  *
  * - Brand mood / visual brief comes LAST, as flavour — never first.
  */
@@ -94,27 +95,29 @@ export function composeFluxPrompt(brand: BrandProfile): string {
   const bodyQualifier = colorQualifier(bodyColor);
   const keywords = brand.styleKeywords.join(", ");
   return [
-    // 1. SCENE — robot type, framing
-    "A friendly minimal robot character mascot, simple modern cartoon style,",
-    "smooth polished metal construction.",
-    "Upper body portrait — head and torso only, cropped just below the chest.",
+    // 1. SCENE — framing first, style second
+    "A friendly minimal robot character mascot, BUST PORTRAIT — head, shoulders and upper torso only,",
+    "tightly cropped close-up just below the chest, NO legs visible, NO arms below the elbow.",
+    "Simple flat modern 2D cartoon illustration style, isometric character art look.",
+    // 2. STYLE NEGATIONS (placed early so they bias the whole composition)
+    "NOT photorealistic, NOT 3D rendered, NOT industrial steampunk, NOT metallic photoreal —",
+    "just clean flat 2D illustration with subtle soft shading.",
     "Looking straight forward.",
-    // 2. CHEST PLATE — the logo drop zone, leads the description
-    `The robot has a clearly visible smooth metallic chest plate in the center of its torso —`,
-    `a polished plain panel of ${chestQualifier} ${chestColor} metal (color rgb(${chestRgb.r},${chestRgb.g},${chestRgb.b})),`,
-    "like a single uniform piece, perfectly flat, completely empty.",
-    "No logo, no symbol, no gauge, no button, no rivet, no engraving,",
-    "no circle, no emblem, no decoration — just a plain blank metallic chest panel.",
-    // 3. OTHER BODY PARTS — subordinate to the chest plate
-    `Other body parts (head, neck, shoulders, arms, hands) in ${bodyQualifier} ${bodyColor} matte metal tones, simple and minimal.`,
-    // 4. MOOD (comes last)
-    `Overall mood: ${keywords}. ${brand.visualBrief}`,
-    // 5. BACKGROUND
-    `On a flat pure solid uniform ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}),`,
-    "no gradients, no patterns, no shadow falloff, perfectly uniform colour edge-to-edge.",
-    // 6. STYLE FINISH
-    "Sharp clean silhouette. Cute friendly character.",
-    "No glow effects, no lens flares, no rim light, no bright specular highlights on the chest plate.",
+    // 3. CHEST PLATE — the logo drop zone, leads the description
+    `The robot has a clearly visible large centered chest plate area on its torso —`,
+    `a smooth flat panel of ${chestQualifier} ${chestColor} (color rgb(${chestRgb.r},${chestRgb.g},${chestRgb.b})),`,
+    "perfectly empty, completely blank: no buttons, no gauges, no symbols, no logo,",
+    "no circle, no emblem, no decoration. Like a brand mascot's emblem spot, intentionally left clean.",
+    // 4. OTHER BODY PARTS — subordinate
+    `Body in flat ${chestQualifier} ${chestColor} smooth shapes; headphones and joint details in ${bodyQualifier} ${bodyColor}.`,
+    // 5. BACKGROUND — colored + halo (kept in the final output)
+    `On a flat solid ${brand.backgroundColor} background color rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}),`,
+    `with a soft warm ambient halo glow behind the robot — atmospheric, modern brand-mascot framing.`,
+    // 6. MOOD (last, as flavour)
+    `Mood: ${keywords}. ${brand.visualBrief}`,
+    // 7. STYLE FINISH
+    "Style: friendly modern tech-startup mascot, simple geometric shapes, clean vector-style lines, minimal details.",
+    "Cute approachable character.",
   ].join(" ");
 }
 
@@ -147,20 +150,30 @@ export interface Step1Args {
 export interface Step1Result {
   /** The exact prompt the agent fed to FLUX. */
   readonly prompt: string;
-  /** Raw FLUX output, with its original FLUX background. */
+  /** Raw FLUX output (PNG blob + data URI). */
   readonly rawBlob: Blob;
   readonly rawDataUri: string;
-  /** Robot canvas after background removal (alpha=0 outside silhouette). */
-  readonly robotCanvas: HTMLCanvasElement;
-  /** Same canvas exported as data URI (on a checker background for preview). */
-  readonly robotDataUri: string;
+  /**
+   * Raw FLUX output as a canvas, with its colored background INTACT.
+   * This is what the final composite is built on — we keep the FLUX
+   * background so the output reads as a finished mascot illustration.
+   */
+  readonly rawCanvas: HTMLCanvasElement;
+  /**
+   * Background-removed version of the raw canvas. Used ONLY for
+   * detection — without bg removal, colour-matching the chest plate
+   * could accidentally match same-coloured background pixels (e.g.
+   * Brewsmith with bg=#F5F0E6 and chest=#F5F0E6 — the same colour).
+   * NOT used in the final composite.
+   */
+  readonly silhouetteCanvas: HTMLCanvasElement;
   /** Silhouette bounding box. */
   readonly bbox: SilhouetteBox;
-  /** Detected torso geometry. */
+  /** Detected chest plate geometry — center + suggested logo diameter. */
   readonly torso: { centerX: number; centerY: number; diameter: number };
-  /** Which detection strategy chose the final torso position. */
+  /** Which detection strategy chose the final position. */
   readonly torsoSource: "color-match" | "silhouette-width" | "bbox-heuristic";
-  /** Debug overlay (silhouette bbox + torso crosshair) for the UI. */
+  /** Debug overlay (chest plate bbox + crosshair) painted on the raw image. */
   readonly debugOverlayDataUri: string;
   /** Microcredits debited from the wallet. */
   readonly creditsSpent: number;
@@ -185,34 +198,31 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
   const rawDataUri = await blobToDataUri(rawBlob);
   const rawImgEl = await loadImage(rawBlob);
 
-  // BG removal — sample the ACTUAL corner colour rather than trusting
-  // brand.backgroundColor. FLUX often paints a slightly different
-  // background colour than asked for (the brand mood drifts it). The
-  // sampled-corner approach is robust to that drift: whatever colour
-  // FLUX actually put in the corners IS the background, by definition.
-  const robotCanvas = imageToCanvas(rawImgEl);
-  const sampledBgHex = sampleCornerColor(robotCanvas);
-  removeSolidBackground(robotCanvas, sampledBgHex, 38);
+  // Two canvases:
+  //   - rawCanvas: the original FLUX image WITH its background intact —
+  //     this is what step3 composites onto.
+  //   - silhouetteCanvas: the same content with the background flooded
+  //     to alpha=0 — used ONLY for detection, so the chest-plate
+  //     colour-match doesn't accidentally match same-colored bg pixels.
+  const rawCanvas = imageToCanvas(rawImgEl);
+  const silhouetteCanvas = imageToCanvas(rawImgEl);
+  const sampledBgHex = sampleCornerColor(silhouetteCanvas);
+  removeSolidBackground(silhouetteCanvas, sampledBgHex, 38);
 
-  // Torso detection — multi-strategy with sanity checks.
-  //
-  // For UPPER-BODY crops (metal robot prompt, head + torso only), the
-  // chest plate sits in the 50-85% band of the silhouette bbox. The
-  // earlier 35-90% band was for full-body shots where the chest was
-  // higher up the legs-included silhouette. Tighter bounds = better
-  // rejection of false matches.
+  // Chest plate detection — multi-strategy with sanity checks.
   //
   // Order:
-  //   1. Colour-match RESTRICTED TO THE CHEST BAND (so head highlights
-  //      — antenna tips, lens flares, edge specular — can't be
-  //      confused for the chest plate).
-  //   2. Silhouette-width fallback: find the widest row within the
-  //      chest band. Provider-agnostic — works even if FLUX painted
-  //      the chest plate the wrong colour.
-  //   3. Plain bbox-65% as the last-resort fallback (chest sits ~65%
-  //      down an upper-body silhouette).
+  //   1. Colour-match RESTRICTED TO THE CHEST BAND, returning the
+  //      BBOX CENTRE of matched pixels (not centroid — centroid is
+  //      density-biased; the geometric centre is the true visual
+  //      centre of the chest plate).
+  //   2. Silhouette-width fallback.
+  //   3. Plain bbox-65% as last-resort.
+  //
+  // Diameter from colour-match = ~50% of the chest plate's SMALLER
+  // dimension, giving the logo a healthy margin inside the plate.
   const torsoColor = pickTorsoColor(brand);
-  const bbox = detectSilhouetteBox(robotCanvas);
+  const bbox = detectSilhouetteBox(silhouetteCanvas);
   const chestYMin = bbox.top + Math.floor(bbox.height * 0.50);
   const chestYMax = bbox.top + Math.floor(bbox.height * 0.90);
   const isInChestBand = (cy: number): boolean => cy >= chestYMin && cy <= chestYMax;
@@ -220,7 +230,7 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
   let torso: { centerX: number; centerY: number; diameter: number };
   let torsoSource: "color-match" | "silhouette-width" | "bbox-heuristic";
 
-  const colorMatched = detectTorsoByColor(robotCanvas, torsoColor, {
+  const colorMatched = detectTorsoByColor(silhouetteCanvas, torsoColor, {
     tolerance: 50,
     yMin: chestYMin,
     yMax: chestYMax,
@@ -234,15 +244,13 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
     };
     torsoSource = "color-match";
   } else {
-    const widthBased = detectTorsoBySilhouetteWidth(robotCanvas, bbox);
+    const widthBased = detectTorsoBySilhouetteWidth(silhouetteCanvas, bbox);
     if (isInChestBand(widthBased.centerY)) {
       torso = widthBased;
       torsoSource = "silhouette-width";
     } else {
       torso = {
         centerX: Math.round(bbox.left + bbox.width / 2),
-        // Upper-body crop: the chest plate is around 65% down the
-        // silhouette (vs ~55% on a full-body crop with legs).
         centerY: Math.round(bbox.top + bbox.height * 0.65),
         diameter: Math.round(bbox.width * 0.38),
       };
@@ -250,16 +258,18 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
     }
   }
 
-  const robotDataUri = canvasToDataUri(robotCanvas);
-  const debugOverlay = renderTorsoDebugOverlay(robotCanvas, bbox, torso);
+  // Debug overlay drawn over the RAW canvas (with bg intact) so the
+  // user sees the marker on the actual final-output background, not
+  // on a checkered void.
+  const debugOverlay = renderTorsoDebugOverlay(rawCanvas, bbox, torso);
   const debugOverlayDataUri = canvasToDataUri(debugOverlay);
 
   return {
     prompt,
     rawBlob,
     rawDataUri,
-    robotCanvas,
-    robotDataUri,
+    rawCanvas,
+    silhouetteCanvas,
     bbox,
     torso,
     torsoSource,
@@ -364,8 +374,11 @@ export async function step3Composite(args: Step3Args): Promise<Step3Result> {
     ...(settings.shadowBlur !== undefined ? { shadowBlur: settings.shadowBlur } : {}),
     ...(settings.shadowColor !== undefined ? { shadowColor: settings.shadowColor } : {}),
   };
+  // Composite onto the RAW canvas (FLUX bg intact) so the final
+  // image keeps the colored background + halo, like a finished
+  // brand mascot illustration.
   const canvas = compositeLogoOnRobot(
-    robot.robotCanvas,
+    robot.rawCanvas,
     logo.processedImg,
     torso,
     compositeOpts,
