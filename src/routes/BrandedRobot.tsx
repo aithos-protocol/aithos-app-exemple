@@ -551,7 +551,7 @@ export function BrandedRobot() {
         <button
           type="button"
           onClick={() => void runStep2()}
-          disabled={!uploaded || step2Running}
+          disabled={!activeCanvas || step2Running}
         >
           {step2Running
             ? "Asking Sonnet…"
@@ -641,11 +641,11 @@ export function BrandedRobot() {
       <section style={stepStyle}>
         <h3>Step 4 — Composite</h3>
         <p style={{ fontSize: "0.9em", color: "#555" }}>
-          {!uploaded || !vision || !step3Result
+          {!activeCanvas || !vision || !step3Result
             ? "Run steps 1, 2 and 3 first."
             : "Sliders re-render the composite live."}
         </p>
-        {uploaded && vision && step3Result && (
+        {activeCanvas && vision && step3Result && (
           <>
             <Step4Controls settings={settings} onChange={setSettings} />
             {step4Result && (
