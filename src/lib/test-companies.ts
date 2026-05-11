@@ -43,15 +43,13 @@ export const BREWSMITH_COFFEE: BrandProfile = {
   name: "Brewsmith Coffee Co.",
   service: "Specialty coffee subscription — freshly-roasted beans delivered weekly",
   visualBrief:
-    "Warm artisanal coffeehouse identity. Hand-crafted, cosy and " +
-    "approachable but with a premium, quality-obsessed feel. Earthy " +
-    "tones, soft lighting, no harsh edges — like a slow morning in " +
-    "a wood-panelled café.",
+    "Warm cosy coffeehouse atmosphere — hand-crafted artisanal feel " +
+    "with a premium quality-obsessed mood.",
   styleKeywords: ["artisanal", "warm", "hand-crafted", "cosy", "premium"],
   primaryColor: "#3E2723",
   secondaryColor: "#F5F0E6",
   backgroundColor: "#F5F0E6",
-  seed: 7,
+  seed: 42,
   logoDataUri: BREWSMITH_LOGO_DATA_URI,
   logoHasAlpha: true,
 };
@@ -75,14 +73,13 @@ export const PULSE_ANALYTICS: BrandProfile = {
   name: "Pulse Analytics",
   service: "Real-time SaaS analytics dashboard for product teams",
   visualBrief:
-    "Modern minimal SaaS identity. Cool, technical, trustworthy, " +
-    "data-forward. Clean geometry, generous whitespace, subtle " +
-    "tech-blue accents — confident without shouting.",
+    "Modern minimal SaaS feel — cool, technical, trustworthy and " +
+    "data-forward. Clean geometry, professional.",
   styleKeywords: ["minimal", "modern", "clean", "tech", "professional"],
   primaryColor: "#0F62FE",
   secondaryColor: "#FFFFFF",
   backgroundColor: "#F4F7FB",
-  seed: 19,
+  seed: 42,
   logoDataUri: PULSE_LOGO_DATA_URI,
   logoHasAlpha: true,
 };

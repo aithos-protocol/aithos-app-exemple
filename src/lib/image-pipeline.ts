@@ -233,11 +233,6 @@ export function detectSilhouetteBox(
  * Estimate the torso center of a humanoid silhouette using a simple
  * heuristic: center-x of the silhouette, y at the chest height
  * (typically ~55-60% down from the top of the silhouette).
- *
- * This works reliably for portrait-orientation robot illustrations
- * (head on top, legs/base on bottom). For other compositions a more
- * sophisticated approach (e.g. a SAM-style segmentation) would be
- * needed, but those are out of scope for the V1 client-side path.
  */
 export function estimateTorsoCenter(
   box: SilhouetteBox,
@@ -245,11 +240,138 @@ export function estimateTorsoCenter(
 ): { centerX: number; centerY: number; diameter: number } {
   const cx = Math.round(box.left + box.width / 2);
   const cy = Math.round(box.top + box.height * ratio);
-  // Torso disc diameter as a fraction of the silhouette width — works
-  // for our FLUX-generated robots which sit centered with a torso
-  // about 35-40% as wide as the full silhouette.
   const diameter = Math.round(box.width * 0.38);
   return { centerX: cx, centerY: cy, diameter };
+}
+
+/**
+ * Better torso detector: find the centroid of pixels matching the
+ * declared torso colour (the "t-shirt" color we asked FLUX to paint).
+ *
+ * Algorithm:
+ *   1. Scan all opaque pixels and tag those whose RGB is within
+ *      `tolerance` of the torso color.
+ *   2. Take the largest connected component of tagged pixels.
+ *   3. Centroid = mean(x), mean(y).
+ *   4. Diameter = 1.8 * mean(distance from centroid) ≈ a tight disc
+ *      that fits inside the t-shirt.
+ *
+ * Falls back to the silhouette-bbox heuristic when no significant
+ * torso-colored region is found — that way the agent always
+ * produces *some* center, even if the t-shirt detection fails.
+ */
+export function detectTorsoByColor(
+  canvas: HTMLCanvasElement,
+  torsoHex: string,
+  tolerance = 32,
+): { centerX: number; centerY: number; diameter: number; pixelCount: number } | null {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+  const { width: w, height: h } = canvas;
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const ref = hexToRgb(torsoHex);
+  const tol2 = tolerance * tolerance;
+  // Collect matching coordinates in the central 60% horizontally
+  // (avoids picking up arms/legs that happen to share the torso color)
+  const xMin = Math.floor(w * 0.20);
+  const xMax = Math.ceil(w * 0.80);
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = xMin; x < xMax; x++) {
+      const i = (y * w + x) * 4;
+      if (data[i + 3]! < 200) continue; // not opaque
+      const dr = data[i]! - ref.r;
+      const dg = data[i + 1]! - ref.g;
+      const db = data[i + 2]! - ref.b;
+      if (dr * dr + dg * dg + db * db > tol2) continue;
+      xs.push(x);
+      ys.push(y);
+    }
+  }
+  if (xs.length < 200) return null;
+  // Centroid
+  let sx = 0;
+  let sy = 0;
+  for (let k = 0; k < xs.length; k++) {
+    sx += xs[k]!;
+    sy += ys[k]!;
+  }
+  const cx = sx / xs.length;
+  const cy = sy / ys.length;
+  // Mean distance from centroid → disc radius
+  let sumDist = 0;
+  for (let k = 0; k < xs.length; k++) {
+    const dx = xs[k]! - cx;
+    const dy = ys[k]! - cy;
+    sumDist += Math.sqrt(dx * dx + dy * dy);
+  }
+  const meanDist = sumDist / xs.length;
+  // Diameter = 2 * (1.4 * meanDist) — gives a disc that comfortably
+  // fits within the t-shirt panel without overflowing.
+  const diameter = Math.round(2 * 1.4 * meanDist);
+  return {
+    centerX: Math.round(cx),
+    centerY: Math.round(cy),
+    diameter,
+    pixelCount: xs.length,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Debug overlay                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Render a debug overlay on top of an image: silhouette bbox in
+ * green, torso center crosshair + circle in red. Used in the
+ * 3-step UI so the user can see exactly where the agent placed
+ * the logo target.
+ */
+export function renderTorsoDebugOverlay(
+  source: HTMLCanvasElement,
+  bbox: SilhouetteBox,
+  torso: { centerX: number; centerY: number; diameter: number },
+): HTMLCanvasElement {
+  const out = document.createElement("canvas");
+  out.width = source.width;
+  out.height = source.height;
+  const ctx = out.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+  // Checker background so transparent pixels are visible
+  ctx.fillStyle = "#eaeaea";
+  ctx.fillRect(0, 0, out.width, out.height);
+  const checkerSize = 16;
+  ctx.fillStyle = "#fafafa";
+  for (let y = 0; y < out.height; y += checkerSize * 2) {
+    for (let x = 0; x < out.width; x += checkerSize * 2) {
+      ctx.fillRect(x, y, checkerSize, checkerSize);
+      ctx.fillRect(x + checkerSize, y + checkerSize, checkerSize, checkerSize);
+    }
+  }
+  ctx.drawImage(source, 0, 0);
+  // Bbox (green)
+  ctx.strokeStyle = "rgba(0, 180, 0, 0.9)";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(bbox.left, bbox.top, bbox.width, bbox.height);
+  // Torso center + circle (red)
+  ctx.strokeStyle = "rgba(220, 30, 30, 0.95)";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(torso.centerX, torso.centerY, torso.diameter / 2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  const half = torso.diameter / 2 + 20;
+  ctx.moveTo(torso.centerX - half, torso.centerY);
+  ctx.lineTo(torso.centerX + half, torso.centerY);
+  ctx.moveTo(torso.centerX, torso.centerY - half);
+  ctx.lineTo(torso.centerX, torso.centerY + half);
+  ctx.stroke();
+  return out;
+}
+
+export function canvasToDataUri(canvas: HTMLCanvasElement): string {
+  return canvas.toDataURL("image/png");
 }
 
 /* -------------------------------------------------------------------------- */
