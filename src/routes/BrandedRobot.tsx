@@ -55,6 +55,14 @@ const BLEND_MODES: GlobalCompositeOperation[] = [
   "source-over",
 ];
 
+const IMAGE_MODEL_CHOICES = [
+  { id: "image:imagen-4", label: "Imagen 4 (default — premium brand mascot)" },
+  { id: "image:imagen-3", label: "Imagen 3 (flat illustration)" },
+  { id: "image:nano-banana", label: "Nano Banana (Gemini Flash Image)" },
+  { id: "image:flux-pro-1.1", label: "FLUX Pro 1.1 (legacy)" },
+] as const;
+type ImageModelChoice = (typeof IMAGE_MODEL_CHOICES)[number]["id"];
+
 export function BrandedRobot() {
   const { sdk, state } = useSdk();
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -64,7 +72,8 @@ export function BrandedRobot() {
   const [step1Running, setStep1Running] = useState(false);
   const [step1Result, setStep1Result] = useState<Step1Result | null>(null);
   const [step1Error, setStep1Error] = useState<string | null>(null);
-  const [seedNonce, setSeedNonce] = useState(0); // bumped on "Regenerate"
+  const [seedNonce, setSeedNonce] = useState(0);
+  const [modelId, setModelId] = useState<ImageModelChoice>("image:imagen-4");
 
   // --- Step 2 state ---
   const [step2Running, setStep2Running] = useState(false);
@@ -147,7 +156,8 @@ export function BrandedRobot() {
       const r = await step1GenerateRobot({
         brand,
         sdk,
-        // Each "Regenerate" bumps the seed so FLUX gives a fresh result
+        model: modelId,
+        // Each "Regenerate" bumps the seed so the model gives a fresh result
         ...(seedNonce > 0 ? { seedOverride: (brand.seed ?? 0) + seedNonce } : {}),
       });
       setStep1Result(r);
@@ -246,11 +256,28 @@ export function BrandedRobot() {
       <section style={stepStyle}>
         <h3>Step 1 — Generate robot</h3>
         <p style={{ fontSize: "0.9em", color: "#555" }}>
-          Calls FLUX with the brand-derived prompt, removes the FLUX
-          background, and detects the t-shirt centroid as the logo
-          drop zone. Hit <strong>Regenerate</strong> to bump the seed
-          and try a different robot.
+          Calls the chosen image model with the brand-derived prompt,
+          removes the background, and detects the torso center via
+          MediaPipe Pose. Hit <strong>Regenerate</strong> to bump the
+          seed and try a different result.
         </p>
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+            Image model
+          </span>
+          <select
+            value={modelId}
+            onChange={(e) => setModelId(e.target.value as ImageModelChoice)}
+            disabled={step1Running}
+            style={{ minWidth: 320 }}
+          >
+            {IMAGE_MODEL_CHOICES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="row" style={{ gap: 8 }}>
           <button
             type="button"
@@ -258,7 +285,7 @@ export function BrandedRobot() {
             disabled={step1Running}
           >
             {step1Running
-              ? "Calling FLUX…"
+              ? "Generating…"
               : step1Result
                 ? "Generate"
                 : "Generate robot"}

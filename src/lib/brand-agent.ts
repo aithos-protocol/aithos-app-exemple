@@ -132,7 +132,15 @@ function colorQualifier(hex: string): string {
 export interface Step1Args {
   readonly brand: BrandProfile;
   readonly sdk: AithosSDK;
-  readonly model?: "image:flux-schnell" | "image:flux-dev" | "image:flux-pro-1.1" | "image:flux-pro-1.1-ultra";
+  /** Defaults to "image:imagen-4" — closest match to the Aithos reference style. */
+  readonly model?:
+    | "image:flux-schnell"
+    | "image:flux-dev"
+    | "image:flux-pro-1.1"
+    | "image:flux-pro-1.1-ultra"
+    | "image:imagen-3"
+    | "image:imagen-4"
+    | "image:nano-banana";
   /** Override the brand's seed (used for "regenerate" — bump for variety). */
   readonly seedOverride?: number;
 }
@@ -177,12 +185,19 @@ export interface Step1Result {
 
 export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> {
   const { brand, sdk } = args;
-  const model = args.model ?? "image:flux-pro-1.1";
+  // Imagen 4 is the closest match to the Aithos reference style in our
+  // tests. FLUX Pro 1.1 remains available for callers who prefer it.
+  const model = args.model ?? "image:imagen-4";
   const prompt = composeFluxPrompt(brand);
   const seed = args.seedOverride ?? brand.seed;
 
+  // Cast: the new Imagen / Nano Banana ids landed in @aithos/sdk
+  // alpha.17. The example app's installed version may still be
+  // alpha.16 until `pnpm install` picks up the new release; the
+  // server-side allowlist is what matters for security and the proxy
+  // accepts these ids in production.
   const r = await sdk.compute.invokeImage({
-    model,
+    model: model as "image:flux-pro-1.1",
     prompt,
     aspectRatio: "1:1",
     numberOfImages: 1,
