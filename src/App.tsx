@@ -5,6 +5,7 @@ import { Route, Routes } from "react-router-dom";
 
 import { Nav } from "./components/Nav.js";
 import { AuthCallback } from "./routes/AuthCallback.js";
+import { BrandedRobot } from "./routes/BrandedRobot.js";
 import { Compute } from "./routes/Compute.js";
 import { Home } from "./routes/Home.js";
 import { Image } from "./routes/Image.js";
@@ -25,6 +26,7 @@ export function App() {
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/compute" element={<Compute />} />
           <Route path="/image" element={<Image />} />
+          <Route path="/branded-robot" element={<BrandedRobot />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

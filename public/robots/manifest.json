@@ -1,0 +1,44 @@
+{
+  "schema": "aithos.branded-robot.v1",
+  "templates": [
+    {
+      "id": "robot-classic",
+      "label": "Classic",
+      "description": "Friendly cartoon robot on dark navy with golden halo",
+      "file": "/robots/robot-classic.png",
+      "width": 1024,
+      "height": 1024,
+      "torso": {
+        "centerX": 519,
+        "centerY": 794,
+        "radius": 95
+      }
+    },
+    {
+      "id": "robot-warm",
+      "label": "Warm",
+      "description": "Cream-colored robot on beige, approachable mood",
+      "file": "/robots/robot-warm.png",
+      "width": 1024,
+      "height": 1024,
+      "torso": {
+        "centerX": 518,
+        "centerY": 668,
+        "radius": 130
+      }
+    },
+    {
+      "id": "robot-tech",
+      "label": "Tech",
+      "description": "Sleek silver robot on deep blue, high-tech feel",
+      "file": "/robots/robot-tech.png",
+      "width": 1024,
+      "height": 1024,
+      "torso": {
+        "centerX": 515,
+        "centerY": 534,
+        "radius": 75
+      }
+    }
+  ]
+}

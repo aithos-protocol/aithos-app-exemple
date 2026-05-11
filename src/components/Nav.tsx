@@ -24,6 +24,7 @@ export function Nav() {
       <NavLink to="/wallet">Wallet</NavLink>
       <NavLink to="/compute">Compute</NavLink>
       <NavLink to="/image">Image</NavLink>
+      <NavLink to="/branded-robot">Branded robot</NavLink>
       <span className="pill">
         <strong>{ownerLabel}</strong> · {jwtLabel} {delegateLabel}
       </span>

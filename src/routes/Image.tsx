@@ -120,6 +120,14 @@ export function Image() {
     setError(null);
     setOut(null);
     try {
+      // Build optional fields ahead so the args object stays readonly-
+      // friendly (InvokeImageArgs.* are all `readonly`).
+      let parsedSeed: number | undefined;
+      const trimmedSeed = seed.trim();
+      if (trimmedSeed.length > 0) {
+        const n = Number.parseInt(trimmedSeed, 10);
+        if (Number.isFinite(n) && n >= 0) parsedSeed = n;
+      }
       const args: Parameters<typeof sdk.compute.invokeImage>[0] = {
         // Owner sessions can omit mandateId — the SDK fills it with a
         // sentinel. Delegate sessions still need the explicit id.
@@ -128,15 +136,9 @@ export function Image() {
         prompt,
         aspectRatio,
         numberOfImages,
+        ...(negativePrompt ? { negativePrompt } : {}),
+        ...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
       };
-      if (negativePrompt) args.negativePrompt = negativePrompt;
-      const trimmedSeed = seed.trim();
-      if (trimmedSeed.length > 0) {
-        const parsed = Number.parseInt(trimmedSeed, 10);
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          args.seed = parsed;
-        }
-      }
       const r = await sdk.compute.invokeImage(args);
       setOut(r);
     } catch (e) {
