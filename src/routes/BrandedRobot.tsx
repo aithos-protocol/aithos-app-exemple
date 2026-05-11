@@ -1,394 +1,326 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// /branded-robot — pick a robot template, drop your logo on its torso,
-// download a branded-character poster.
+// /branded-robot — agent-driven mascot generator.
 //
-// Architecture: pure client-side compositing on an HTML canvas.
+// Purpose: demo the full agent pipeline. The user picks a test
+// company (each is a self-contained BrandProfile), clicks Generate,
+// and the agent autonomously:
 //
-//   - Robot templates are pre-rendered PNGs shipped under /public/robots/
-//     with a manifest.json that carries the torso disc coordinates
-//     (centerX, centerY, radius) measured at generation time.
-//   - The user uploads a logo (PNG / JPEG / SVG). It's loaded as an
-//     HTMLImageElement and composited over the disc.
-//   - All processing is local — the logo never touches the network.
+//   1. Composes a brand-aware FLUX prompt
+//   2. Calls sdk.compute.invokeImage to produce the raw mascot
+//   3. Flood-fills the FLUX background to alpha=0 (client-side)
+//   4. Detects the torso position by silhouette bbox heuristic
+//   5. Composites the logo on the chest with multiply/screen blend
+//   6. Returns a transparent-background PNG ready for use
 //
-// Why not have FLUX paint the logo: diffusion models can't reproduce a
-// specific brand mark pixel-accurately. They invent "logo-shaped stuff"
-// at best. Two-step (FLUX template + canvas overlay) gives 100%
-// fidelity on the brand mark.
+// No UI knobs are exposed beyond the company picker — this is the
+// agent's autonomy contract. The same agent could be invoked
+// headlessly (e.g. from a build step or a server-side worker) with
+// the same BrandProfile input.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 
-interface TemplateMeta {
-  readonly id: string;
-  readonly label: string;
-  readonly description: string;
-  readonly file: string;
-  readonly width: number;
-  readonly height: number;
-  readonly torso: {
-    readonly centerX: number;
-    readonly centerY: number;
-    readonly radius: number;
-  };
-}
+import { generateBrandedRobot, type AgentPhase } from "../lib/brand-agent.js";
+import type { BrandProfile, BrandedRobotResult } from "../lib/brand-types.js";
+import { TEST_COMPANIES } from "../lib/test-companies.js";
+import { useSdk } from "../sdk-context.js";
+import { formatError } from "./Home.js";
 
-interface Manifest {
-  readonly schema: string;
-  readonly templates: readonly TemplateMeta[];
-}
-
-/**
- * Inter-tick redraw helper — load an image lazily and keep a single
- * cached HTMLImageElement per source.
- */
-function useImage(src: string | null): HTMLImageElement | null {
-  const [img, setImg] = useState<HTMLImageElement | null>(null);
-  useEffect(() => {
-    if (!src) {
-      setImg(null);
-      return;
-    }
-    const el = new Image();
-    // We don't set crossOrigin: both the robot template and the user-
-    // uploaded logo are same-origin / data-URI respectively — no CORS.
-    let cancelled = false;
-    el.onload = () => {
-      if (!cancelled) setImg(el);
-    };
-    el.onerror = () => {
-      if (!cancelled) setImg(null);
-    };
-    el.src = src;
-    return () => {
-      cancelled = true;
-    };
-  }, [src]);
-  return img;
-}
+const PHASE_LABELS: Record<AgentPhase, string> = {
+  "composing-prompt": "Composing the FLUX prompt from the brand brief",
+  "calling-flux": "Calling FLUX (the robot model — this is the slowest step)",
+  "removing-bg": "Removing the background by flood-fill",
+  "detecting-torso": "Detecting the torso position",
+  "preparing-logo": "Preparing the logo (auto-transparency if needed)",
+  compositing: "Compositing the logo onto the chest",
+  encoding: "Encoding the final PNG",
+  done: "Done",
+};
 
 export function BrandedRobot() {
-  const [manifest, setManifest] = useState<Manifest | null>(null);
-  const [selectedId, setSelectedId] = useState<string>("");
-  const [logoSrc, setLogoSrc] = useState<string | null>(null);
-  // Scale relative to torso disc diameter — 1.0 = fits exactly inside the
-  // disc, < 1.0 = leaves padding around the logo, > 1.0 = overflows the
-  // disc (allowed, in case the logo benefits from a tighter framing).
-  const [scale, setScale] = useState(0.85);
-  // Fine-tune offset (pixels in template coordinate space)
-  const [offsetX, setOffsetX] = useState(0);
-  const [offsetY, setOffsetY] = useState(0);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const { sdk, state } = useSdk();
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<AgentPhase | null>(null);
+  const [phaseDetail, setPhaseDetail] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<BrandedRobotResult | null>(null);
+  const [rawDataUri, setRawDataUri] = useState<string | null>(null);
 
-  // Load manifest once
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/robots/manifest.json")
-      .then((r) => r.json() as Promise<Manifest>)
-      .then((m) => {
-        if (cancelled) return;
-        setManifest(m);
-        if (m.templates[0] && !selectedId) {
-          setSelectedId(m.templates[0].id);
-        }
-      })
-      .catch(() => {
-        /* manifest missing — user sees the empty state */
+  const isAuthenticated =
+    state.canSignAsOwner || state.delegates.length > 0;
+
+  if (!isAuthenticated) {
+    return (
+      <section>
+        <h2>Branded robot — agent</h2>
+        <p className="lede">
+          Sign in as an owner first so the agent can spend your wallet
+          on the FLUX call.
+        </p>
+      </section>
+    );
+  }
+
+  const brand: BrandProfile = TEST_COMPANIES[selectedIdx]!;
+
+  const onGenerate = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    setRawDataUri(null);
+    setPhase("composing-prompt");
+    try {
+      const r = await generateBrandedRobot(brand, {
+        sdk,
+        onProgress: (p, detail) => {
+          setPhase(p);
+          setPhaseDetail(detail ?? null);
+        },
       });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const selected: TemplateMeta | null = useMemo(() => {
-    if (!manifest) return null;
-    return manifest.templates.find((t) => t.id === selectedId) ?? null;
-  }, [manifest, selectedId]);
-
-  const robotImg = useImage(selected ? selected.file : null);
-  const logoImg = useImage(logoSrc);
-
-  // Composite into canvas whenever inputs change.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !selected || !robotImg) return;
-    canvas.width = selected.width;
-    canvas.height = selected.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    // 1. Draw the robot template
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(robotImg, 0, 0, canvas.width, canvas.height);
-    // 2. Draw the logo over the torso disc, scaled to fit
-    if (logoImg && logoImg.width > 0 && logoImg.height > 0) {
-      const targetDiameter = selected.torso.radius * 2 * scale;
-      // Preserve logo aspect ratio: fit-INSIDE a square of side targetDiameter
-      const logoAspect = logoImg.width / logoImg.height;
-      let drawW: number;
-      let drawH: number;
-      if (logoAspect >= 1) {
-        // wider than tall
-        drawW = targetDiameter;
-        drawH = targetDiameter / logoAspect;
-      } else {
-        drawH = targetDiameter;
-        drawW = targetDiameter * logoAspect;
-      }
-      const cx = selected.torso.centerX + offsetX;
-      const cy = selected.torso.centerY + offsetY;
-      // Optional: clip to the disc so logos never overflow visually.
-      // We make this opt-in via a checkbox later if useful — for now,
-      // keep it free so wider logos can hang outside the disc (a la
-      // logo-on-T-shirt).
-      ctx.drawImage(logoImg, cx - drawW / 2, cy - drawH / 2, drawW, drawH);
+      setResult(r);
+      // Also surface the raw FLUX output for comparison
+      const rawReader = new FileReader();
+      rawReader.onload = () => {
+        if (typeof rawReader.result === "string") setRawDataUri(rawReader.result);
+      };
+      rawReader.readAsDataURL(r.rawRobotBlob);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
     }
-    // Reset cached download URL — user must hit Export again
-    setDownloadUrl(null);
-  }, [selected, robotImg, logoImg, scale, offsetX, offsetY]);
-
-  const onLogoFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        setLogoSrc(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const exportPng = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      setDownloadUrl(url);
-    }, "image/png");
   };
 
   return (
     <section>
-      <h2>Branded robot</h2>
+      <h2>Branded robot — agent</h2>
       <p className="lede">
-        Pick a robot template, drop your logo on its torso, download the
-        composite as PNG. The logo stays on-device — never sent to any
-        server. Templates were generated once with FLUX Pro and ship
-        with the app.
+        End-to-end demo of the brand-mascot agent. Pick a test company,
+        click <strong>Generate</strong>, and the agent runs the full
+        pipeline autonomously (prompt → FLUX → bg removal → torso
+        detection → logo composite). No further UI input.
       </p>
 
-      {!manifest && (
-        <div className="error">
-          Robot manifest missing — make sure{" "}
-          <code>/public/robots/manifest.json</code> is present.
+      <h3 style={{ marginTop: 16 }}>1. Pick a brand brief</h3>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        {TEST_COMPANIES.map((c, i) => (
+          <label
+            key={c.name}
+            style={{
+              display: "block",
+              border:
+                i === selectedIdx
+                  ? "2px solid var(--accent, #4a8)"
+                  : "2px solid #ddd",
+              borderRadius: 8,
+              padding: 12,
+              cursor: "pointer",
+              margin: 0,
+              background: c.backgroundColor,
+              color: c.primaryColor,
+            }}
+          >
+            <input
+              type="radio"
+              name="brand-pick"
+              checked={i === selectedIdx}
+              onChange={() => setSelectedIdx(i)}
+              style={{ position: "absolute", opacity: 0 }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <img
+                src={c.logoDataUri}
+                alt={`${c.name} logo`}
+                style={{ width: 56, height: 56, flex: "0 0 auto" }}
+              />
+              <div>
+                <strong style={{ fontSize: "1em" }}>{c.name}</strong>
+                <div style={{ fontSize: "0.85em", marginTop: 4 }}>
+                  {c.service}
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.75em",
+                    marginTop: 6,
+                    fontFamily: "monospace",
+                    opacity: 0.7,
+                  }}
+                >
+                  primary {c.primaryColor} · bg {c.backgroundColor}
+                </div>
+              </div>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      <details style={{ marginBottom: 16 }}>
+        <summary style={{ cursor: "pointer" }}>
+          View the brand brief that will feed the FLUX prompt
+        </summary>
+        <pre
+          style={{
+            background: "#f7f7f7",
+            padding: 12,
+            borderRadius: 4,
+            marginTop: 8,
+            whiteSpace: "pre-wrap",
+            fontSize: "0.85em",
+          }}
+        >
+          {brand.visualBrief}
+          {"\n\nstyle keywords: "}
+          {brand.styleKeywords.join(", ")}
+        </pre>
+      </details>
+
+      <button
+        type="button"
+        onClick={() => void onGenerate()}
+        disabled={busy}
+      >
+        {busy ? "Generating…" : `Generate mascot for ${brand.name}`}
+      </button>
+
+      {busy && phase && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: 12,
+            background: "#fff8e1",
+            border: "1px solid #ffd58a",
+            borderRadius: 6,
+            fontSize: "0.9em",
+          }}
+        >
+          <strong>{PHASE_LABELS[phase]}</strong>
+          {phaseDetail && (
+            <span style={{ marginLeft: 8, opacity: 0.7 }}>
+              ({phaseDetail})
+            </span>
+          )}
         </div>
       )}
 
-      {manifest && (
-        <>
-          <h3 style={{ marginTop: 16 }}>1. Choose a template</h3>
+      {error && (
+        <div className="error" style={{ marginTop: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 24 }}>
+          <h3>Result</h3>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: 12,
-              marginBottom: 16,
+              gridTemplateColumns: "1fr 1fr",
+              gap: 16,
             }}
           >
-            {manifest.templates.map((t) => (
-              <label
-                key={t.id}
+            <figure style={{ margin: 0 }}>
+              <figcaption
                 style={{
-                  display: "block",
-                  border:
-                    t.id === selectedId
-                      ? "2px solid var(--accent, #4a8)"
-                      : "2px solid transparent",
-                  borderRadius: 8,
-                  padding: 8,
-                  cursor: "pointer",
-                  margin: 0,
+                  fontSize: "0.85em",
+                  marginBottom: 6,
+                  fontWeight: 600,
                 }}
               >
-                <input
-                  type="radio"
-                  name="robot-template"
-                  value={t.id}
-                  checked={t.id === selectedId}
-                  onChange={() => setSelectedId(t.id)}
-                  style={{ position: "absolute", opacity: 0 }}
-                />
+                Raw FLUX output (before agent post-processing)
+              </figcaption>
+              {rawDataUri && (
                 <img
-                  src={t.file}
-                  alt={t.label}
+                  src={rawDataUri}
+                  alt="raw flux"
                   style={{
                     width: "100%",
                     height: "auto",
+                    background: brand.backgroundColor,
                     borderRadius: 4,
                     display: "block",
                   }}
                 />
-                <div style={{ marginTop: 6, fontSize: "0.9em" }}>
-                  <strong>{t.label}</strong>
-                  <div style={{ color: "#666", fontSize: "0.85em" }}>
-                    {t.description}
-                  </div>
-                </div>
-              </label>
-            ))}
-          </div>
-
-          <h3>2. Upload your logo</h3>
-          <label
-            className="row"
-            style={{
-              border: "1px dashed #888",
-              borderRadius: 8,
-              padding: 16,
-              display: "flex",
-              gap: 12,
-              alignItems: "center",
-              cursor: "pointer",
-              marginBottom: 16,
-            }}
-          >
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/svg+xml,image/webp"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onLogoFile(f);
-              }}
-              style={{ display: "none" }}
-            />
-            {logoImg ? (
-              <>
+              )}
+            </figure>
+            <figure style={{ margin: 0 }}>
+              <figcaption
+                style={{
+                  fontSize: "0.85em",
+                  marginBottom: 6,
+                  fontWeight: 600,
+                }}
+              >
+                Final composite (transparent BG, logo blended)
+              </figcaption>
+              <div
+                style={{
+                  background:
+                    "repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50% / 16px 16px",
+                  borderRadius: 4,
+                  padding: 4,
+                }}
+              >
                 <img
-                  src={logoSrc!}
-                  alt="logo preview"
+                  src={result.resultDataUri}
+                  alt="branded robot"
                   style={{
-                    width: 64,
-                    height: 64,
-                    objectFit: "contain",
-                    background: "#f0f0f0",
-                    borderRadius: 4,
+                    width: "100%",
+                    height: "auto",
+                    display: "block",
+                    borderRadius: 2,
                   }}
                 />
-                <span>
-                  <strong>Logo loaded</strong> ({logoImg.width} × {logoImg.height}{" "}
-                  px) — click to replace
-                </span>
-              </>
-            ) : (
-              <span style={{ color: "#666" }}>
-                Click to pick a logo (PNG, JPEG, SVG, or WebP). Stays on your
-                device.
-              </span>
-            )}
-          </label>
+              </div>
+            </figure>
+          </div>
 
-          <h3>3. Position</h3>
-          <div className="stack" style={{ gap: 8, marginBottom: 16 }}>
-            <label>
-              <span>
-                Logo size — {(scale * 100).toFixed(0)}% of torso disc
-              </span>
-              <input
-                type="range"
-                min={0.3}
-                max={1.6}
-                step={0.05}
-                value={scale}
-                onChange={(e) => setScale(Number(e.target.value))}
-                style={{ width: "100%" }}
-              />
-            </label>
-            <div className="row" style={{ gap: 12 }}>
-              <label style={{ flex: 1 }}>
-                <span>Horizontal offset — {offsetX}px</span>
-                <input
-                  type="range"
-                  min={-100}
-                  max={100}
-                  step={1}
-                  value={offsetX}
-                  onChange={(e) => setOffsetX(Number(e.target.value))}
-                  style={{ width: "100%" }}
-                />
-              </label>
-              <label style={{ flex: 1 }}>
-                <span>Vertical offset — {offsetY}px</span>
-                <input
-                  type="range"
-                  min={-100}
-                  max={100}
-                  step={1}
-                  value={offsetY}
-                  onChange={(e) => setOffsetY(Number(e.target.value))}
-                  style={{ width: "100%" }}
-                />
-              </label>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setScale(0.85);
-                setOffsetX(0);
-                setOffsetY(0);
-              }}
-              style={{ alignSelf: "flex-start" }}
+          <div className="row" style={{ gap: 8, marginTop: 12 }}>
+            <a
+              href={result.resultDataUri}
+              download={`${brand.name.toLowerCase().replace(/\W+/g, "-")}-mascot.png`}
             >
-              Reset position
-            </button>
+              Download final PNG
+            </a>
           </div>
 
-          <h3>4. Preview</h3>
-          <div
-            style={{
-              maxWidth: 480,
-              background:
-                "repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50% / 16px 16px",
-              borderRadius: 8,
-              padding: 8,
-              marginBottom: 12,
-            }}
-          >
-            <canvas
-              ref={canvasRef}
-              style={{
-                width: "100%",
-                height: "auto",
-                display: "block",
-                borderRadius: 4,
-              }}
-            />
-          </div>
-
-          <div className="row" style={{ gap: 8 }}>
-            <button type="button" onClick={() => void exportPng()}>
-              Export PNG
-            </button>
-            {downloadUrl && selected && (
-              <a
-                href={downloadUrl}
-                download={`${selected.id}-branded.png`}
-                style={{ alignSelf: "center" }}
-              >
-                Download
-              </a>
-            )}
-          </div>
-          <p
-            className="lede"
-            style={{ fontSize: "0.85em", marginTop: 8, color: "#666" }}
-          >
-            Tip — for the cleanest result, use a square-ish logo with a
-            transparent background. SVG is fine. Very wide or very tall logos
-            will fit inside a square framed by the torso disc.
-          </p>
-        </>
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ cursor: "pointer" }}>
+              Pipeline trace ({result.creditsSpent.toLocaleString()} mc spent)
+            </summary>
+            <dl className="kvtable" style={{ marginTop: 8 }}>
+              <dt>FLUX prompt</dt>
+              <dd>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontSize: "0.8em",
+                    background: "#f7f7f7",
+                    padding: 8,
+                    borderRadius: 4,
+                  }}
+                >
+                  {result.prompt}
+                </pre>
+              </dd>
+              <dt>Torso center</dt>
+              <dd>
+                ({result.torso.centerX}, {result.torso.centerY}) — diameter{" "}
+                {result.torso.diameter}px
+              </dd>
+              <dt>Credits charged</dt>
+              <dd>{result.creditsSpent.toLocaleString()} mc</dd>
+            </dl>
+          </details>
+        </div>
       )}
     </section>
   );
