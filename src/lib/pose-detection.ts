@@ -46,14 +46,15 @@ let landmarkerPromise: Promise<PoseLandmarker> | null = null;
 async function getLandmarker(): Promise<PoseLandmarker> {
   if (landmarkerPromise) return landmarkerPromise;
   landmarkerPromise = (async () => {
+    console.log("[pose] loading MediaPipe Pose Landmarker (lite, ~3MB)…");
+    const t0 = performance.now();
     const vision = await FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm",
     );
-    return await PoseLandmarker.createFromOptions(vision, {
+    const lm = await PoseLandmarker.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath:
           "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-        // "GPU" uses WebGL when available; falls back to CPU silently
         delegate: "GPU",
       },
       runningMode: "IMAGE",
@@ -62,6 +63,10 @@ async function getLandmarker(): Promise<PoseLandmarker> {
       minPosePresenceConfidence: 0.3,
       minTrackingConfidence: 0.3,
     });
+    console.log(
+      `[pose] MediaPipe loaded in ${(performance.now() - t0).toFixed(0)}ms`,
+    );
+    return lm;
   })();
   return landmarkerPromise;
 }
@@ -101,10 +106,24 @@ export async function detectTorsoByPose(
   source: HTMLImageElement | HTMLCanvasElement,
 ): Promise<PoseTorsoResult | null> {
   const lm = await getLandmarker();
+  const t0 = performance.now();
   const result = lm.detect(source);
-  if (!result.landmarks || result.landmarks.length === 0) return null;
+  const detectMs = (performance.now() - t0).toFixed(0);
+
+  if (!result.landmarks || result.landmarks.length === 0) {
+    console.warn(
+      `[pose] MediaPipe returned NO poses (${detectMs}ms). Image likely too stylized / non-humanoid for the model.`,
+    );
+    return null;
+  }
   const pose = result.landmarks[0]!;
-  if (pose.length < 25) return null;
+  console.log(
+    `[pose] MediaPipe found ${result.landmarks.length} pose(s), ${pose.length} landmarks (${detectMs}ms)`,
+  );
+  if (pose.length < 25) {
+    console.warn(`[pose] only ${pose.length} landmarks — need ≥25 (shoulders+hips)`);
+    return null;
+  }
 
   const w = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
   const h = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
@@ -121,9 +140,27 @@ export async function detectTorsoByPose(
   const lh = landmarksPx[23]!; // left hip
   const rh = landmarksPx[24]!; // right hip
 
+  // Surface every key landmark so we can see in DevTools what
+  // MediaPipe actually thinks it found. Visibility ranges 0..1 —
+  // anything under 0.5 is unreliable; under 0.3 is essentially
+  // "the model is guessing".
+  console.log("[pose] key landmarks:", {
+    nose: landmarksPx[0],
+    leftShoulder: ls,
+    rightShoulder: rs,
+    leftElbow: landmarksPx[13],
+    rightElbow: landmarksPx[14],
+    leftHip: lh,
+    rightHip: rh,
+    imageSize: { w, h },
+  });
+
   // Shoulders MUST be confidently detected — they're the anchor.
   const minShoulderVis = 0.5;
   if (ls.visibility < minShoulderVis && rs.visibility < minShoulderVis) {
+    console.warn(
+      `[pose] shoulders below confidence threshold (left=${ls.visibility.toFixed(2)}, right=${rs.visibility.toFixed(2)}, need ≥${minShoulderVis}). Discarding pose.`,
+    );
     return null;
   }
 
@@ -131,10 +168,6 @@ export async function detectTorsoByPose(
   const shoulderMidY = (ls.y + rs.y) / 2;
   const shoulderWidth = Math.hypot(ls.x - rs.x, ls.y - rs.y);
 
-  // If both hips are confidently visible, the torso centre is the
-  // centroid of the shoulders+hips quadrilateral. Otherwise (the
-  // typical case for bust-portrait crops where hips are cropped
-  // out), estimate from the shoulders alone.
   const hipsVisible = lh.visibility > 0.5 && rh.visibility > 0.5;
   let torsoCenterX: number;
   let torsoCenterY: number;
@@ -143,19 +176,23 @@ export async function detectTorsoByPose(
     const hipMidY = (lh.y + rh.y) / 2;
     torsoCenterX = (shoulderMidX + hipMidX) / 2;
     torsoCenterY = (shoulderMidY + hipMidY) / 2;
+    console.log(
+      `[pose] hips visible → centroid of shoulders+hips: (${torsoCenterX.toFixed(0)}, ${torsoCenterY.toFixed(0)})`,
+    );
   } else {
-    // Human anatomy: the chest center sits ~60-65% of one shoulder-
-    // width below the shoulder line. This places the logo on the
-    // upper torso, where a brand mascot's emblem naturally goes.
     torsoCenterX = shoulderMidX;
     torsoCenterY = shoulderMidY + shoulderWidth * 0.6;
+    console.log(
+      `[pose] hips cropped/invisible → shoulder midpoint + 0.6×shoulderWidth: ` +
+        `shoulderMid=(${shoulderMidX.toFixed(0)},${shoulderMidY.toFixed(0)}), ` +
+        `width=${shoulderWidth.toFixed(0)}, ` +
+        `anatomical offset=${(shoulderWidth * 0.6).toFixed(0)}, ` +
+        `final torsoY=${torsoCenterY.toFixed(0)}`,
+    );
   }
 
-  // Logo diameter: 35% of shoulder width. Tight enough to leave
-  // generous margin on both sides; large enough to be legible.
   const diameter = Math.round(shoulderWidth * 0.35);
-
-  return {
+  const result_ = {
     centerX: Math.round(torsoCenterX),
     centerY: Math.round(torsoCenterY),
     diameter,
@@ -163,6 +200,13 @@ export async function detectTorsoByPose(
     hipsVisible,
     landmarksPx,
   };
+  console.log("[pose] returning torso:", {
+    center: `(${result_.centerX}, ${result_.centerY})`,
+    diameter: result_.diameter,
+    shoulderWidth: result_.shoulderWidth,
+    hipsVisible: result_.hipsVisible,
+  });
+  return result_;
 }
 
 /* -------------------------------------------------------------------------- */

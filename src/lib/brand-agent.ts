@@ -275,6 +275,24 @@ export async function step2DetectTorso(
   const chestYMax = bbox.top + Math.floor(bbox.height * 0.95);
   const isInChestBand = (cy: number): boolean => cy >= chestYMin && cy <= chestYMax;
 
+  console.log("[brand-agent] bg removal + detection start:", {
+    canvas: `${rawCanvas.width}×${rawCanvas.height}`,
+    sampledBgHex,
+    silhouetteBbox: bbox,
+    chestBand: `[${chestYMin}, ${chestYMax}]`,
+  });
+  // Sanity check: if the bbox spans the entire image, bg removal
+  // almost certainly failed (gradient bg or noisy edges). The
+  // chest band will be too wide and downstream strategies will
+  // mis-place the target.
+  if (bbox.width >= rawCanvas.width - 2 && bbox.height >= rawCanvas.height - 2) {
+    console.warn(
+      "[brand-agent] silhouette bbox spans the entire image — bg removal failed. " +
+        "Most likely cause: radial-gradient background that flood-fill can't handle. " +
+        "Downstream detection will be unreliable.",
+    );
+  }
+
   let torso: { centerX: number; centerY: number; diameter: number };
   let torsoSource: Step2DetectResult["torsoSource"];
   let pose: PoseTorsoResult | null = null;
@@ -282,7 +300,7 @@ export async function step2DetectTorso(
   try {
     pose = await detectTorsoByPose(rawCanvas);
   } catch (e) {
-    console.warn("[brand-agent] pose detection failed, falling back", e);
+    console.warn("[brand-agent] pose detection threw, falling back", e);
     pose = null;
   }
   if (pose && isInChestBand(pose.centerY)) {
@@ -292,7 +310,18 @@ export async function step2DetectTorso(
       diameter: pose.diameter,
     };
     torsoSource = "pose-landmarker";
+    console.log("[brand-agent] ✅ using pose-landmarker", torso);
   } else {
+    if (pose) {
+      console.warn(
+        `[brand-agent] pose returned centerY=${pose.centerY} OUTSIDE chest band ` +
+          `[${chestYMin}, ${chestYMax}] — rejecting pose, falling through to legacy cascade.`,
+      );
+    } else {
+      console.warn(
+        "[brand-agent] pose returned null — falling through to legacy cascade.",
+      );
+    }
     const colorMatched = detectTorsoByColor(silhouetteCanvas, torsoColor, {
       tolerance: 50,
       yMin: chestYMin,
@@ -306,11 +335,13 @@ export async function step2DetectTorso(
         diameter: colorMatched.diameter,
       };
       torsoSource = "color-match";
+      console.log("[brand-agent] ⚠ using color-match fallback", torso);
     } else {
       const widthBased = detectTorsoBySilhouetteWidth(silhouetteCanvas, bbox);
       if (isInChestBand(widthBased.centerY)) {
         torso = widthBased;
         torsoSource = "silhouette-width";
+        console.log("[brand-agent] ⚠ using silhouette-width fallback", torso);
       } else {
         torso = {
           centerX: Math.round(bbox.left + bbox.width / 2),
@@ -318,6 +349,7 @@ export async function step2DetectTorso(
           diameter: Math.round(bbox.width * 0.38),
         };
         torsoSource = "bbox-heuristic";
+        console.log("[brand-agent] ⚠⚠ using bbox-65% LAST RESORT", torso);
       }
     }
   }
