@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// /compute — invoke Claude through the Aithos compute proxy. Requires
-// a JWT session AND a mandate id (the user pastes one — typically a
-// mandate they minted on /mandates and granted to their own
-// app-example flow, or one for which their own DID is the actor).
+// /compute — invoke Claude through the Aithos compute proxy.
+//
+// Two callers shapes the page handles:
+//   - Owner: pastes a mandate id they minted on /mandates (typically a
+//     compute-only mandate granting `compute.invoke` to this app).
+//   - Delegate: a mandate id was already imported via Home → Mandate.
+//     The mandate id is prefilled from the active delegate; the call
+//     spends compute credits against the subject's wallet according to
+//     the constraints baked into the mandate.
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type { InvokeBedrockResult } from "@aithos/sdk";
+import type { DelegateInfo, InvokeBedrockResult } from "@aithos/sdk";
 
 import { useSdk } from "../sdk-context.js";
 import { formatError } from "./Home.js";
@@ -18,6 +23,8 @@ const MODELS = [
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — balanced" },
   { id: "claude-opus-4-7", label: "Claude Opus 4.7 — best" },
 ];
+
+const COMPUTE_INVOKE_SCOPE = "compute.invoke";
 
 export function Compute() {
   const { sdk, state } = useSdk();
@@ -29,14 +36,51 @@ export function Compute() {
   const [error, setError] = useState<string | null>(null);
   const [out, setOut] = useState<InvokeBedrockResult | null>(null);
 
-  if (!state.canSignAsOwner) {
+  // First imported delegate that carries `compute.invoke` — used to
+  // prefill the mandate id input + to surface a scope warning when
+  // none of the held mandates allows compute spending.
+  const computeDelegate: DelegateInfo | null = useMemo(() => {
+    return (
+      state.delegates.find((d) =>
+        d.scopes.includes(COMPUTE_INVOKE_SCOPE),
+      ) ?? null
+    );
+  }, [state.delegates]);
+
+  useEffect(() => {
+    // Prefill ONCE per delegate change. The user can still override
+    // manually (e.g. owner pasting a different mandate id of theirs).
+    if (computeDelegate && !mandateId) {
+      setMandateId(computeDelegate.mandateId);
+    }
+    // We deliberately omit `mandateId` from deps — we don't want to
+    // re-prefill after the user manually clears the field.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computeDelegate?.mandateId]);
+
+  const isAuthenticated =
+    state.canSignAsOwner || state.delegates.length > 0;
+
+  if (!isAuthenticated) {
     return (
       <section>
         <h2>Compute</h2>
-        <p className="lede">Sign in as an owner first.</p>
+        <p className="lede">
+          Sign in as an owner first <strong>or</strong> import a mandate
+          (Home → Mandate) that carries the <code>{COMPUTE_INVOKE_SCOPE}</code>{" "}
+          scope.
+        </p>
       </section>
     );
   }
+
+  // If the user is delegate-only and none of their mandates includes
+  // compute scope, surface that explicitly — invoking will fail at the
+  // server with `compute_authorization_missing_scope` otherwise.
+  const delegateWithoutComputeScope =
+    !state.canSignAsOwner &&
+    state.delegates.length > 0 &&
+    computeDelegate === null;
 
   const submit = async () => {
     setBusy(true);
@@ -44,7 +88,9 @@ export function Compute() {
     setOut(null);
     try {
       const r = await sdk.compute.invokeBedrock({
-        mandateId,
+        // Owner sessions can omit mandateId — the SDK fills it with a
+        // sentinel. Delegate sessions still need the explicit id.
+        ...(mandateId ? { mandateId } : {}),
         model,
         messages: [{ role: "user", content: prompt }],
         ...(system ? { system } : {}),
@@ -62,12 +108,37 @@ export function Compute() {
     <section>
       <h2>Invoke Claude</h2>
       <p className="lede">
-        Calls <code>aithos.compute_invoke</code> through the compute proxy.
-        Requires a mandate id authorizing this app to spend your wallet
-        — paste one you've minted on <a href="/mandates">/mandates</a>{" "}
-        with <code>app_did</code> matching what's in this example app
-        (placeholder: <code>did:aithos:app:example-placeholder</code>).
+        Calls <code>aithos.compute_invoke</code> through the compute proxy.{" "}
+        {state.canSignAsOwner ? (
+          <>
+            You're signed in as the wallet owner — calls go straight against
+            your own wallet, no mandate needed. (If you want to test a
+            specific mandate you minted on <a href="/mandates">/mandates</a>,
+            paste its id below.)
+          </>
+        ) : computeDelegate ? (
+          <>
+            prefilled from your imported delegate mandate{" "}
+            <code>{computeDelegate.mandateId}</code> (subject{" "}
+            <code>{computeDelegate.subjectDid}</code>, scopes:{" "}
+            <code>{computeDelegate.scopes.join(", ")}</code>).
+          </>
+        ) : (
+          <>
+            none of your imported mandates carries the{" "}
+            <code>{COMPUTE_INVOKE_SCOPE}</code> scope. Ask the issuer for a
+            new bundle that includes it, or sign in as an owner.
+          </>
+        )}
       </p>
+
+      {delegateWithoutComputeScope && (
+        <div className="error">
+          No imported mandate authorizes <code>{COMPUTE_INVOKE_SCOPE}</code>.
+          The compute proxy will reject the call with
+          <code>compute_authorization_missing_scope</code>.
+        </div>
+      )}
       <form
         className="stack"
         onSubmit={(e) => {
@@ -75,15 +146,17 @@ export function Compute() {
           void submit();
         }}
       >
-        <label>
-          <span>Mandate ID</span>
-          <input
-            type="text"
-            value={mandateId}
-            onChange={(e) => setMandateId(e.target.value)}
-            placeholder="mandate:01H8XYZ..."
-          />
-        </label>
+        {!state.canSignAsOwner && (
+          <label>
+            <span>Mandate ID</span>
+            <input
+              type="text"
+              value={mandateId}
+              onChange={(e) => setMandateId(e.target.value)}
+              placeholder="mandate:01H8XYZ..."
+            />
+          </label>
+        )}
         <label>
           <span>Model</span>
           <select value={model} onChange={(e) => setModel(e.target.value)}>
@@ -106,7 +179,14 @@ export function Compute() {
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         </label>
         <div className="row">
-          <button type="submit" disabled={busy || !prompt || !mandateId}>
+          <button
+            type="submit"
+            disabled={
+              busy ||
+              !prompt ||
+              (!state.canSignAsOwner && !mandateId)
+            }
+          >
             {busy ? "Calling…" : "Invoke"}
           </button>
         </div>

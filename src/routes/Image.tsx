@@ -121,7 +121,9 @@ export function Image() {
     setOut(null);
     try {
       const args: Parameters<typeof sdk.compute.invokeImage>[0] = {
-        mandateId,
+        // Owner sessions can omit mandateId — the SDK fills it with a
+        // sentinel. Delegate sessions still need the explicit id.
+        ...(mandateId ? { mandateId } : {}),
         model,
         prompt,
         aspectRatio,
@@ -149,10 +151,12 @@ export function Image() {
       <h2>Generate an image</h2>
       <p className="lede">
         Calls <code>aithos.compute_invoke_image</code> through the compute
-        proxy (fal.ai FLUX behind the scenes). Requires a mandate
-        authorizing this app to spend the subject's wallet —{" "}
+        proxy (fal.ai FLUX behind the scenes).{" "}
         {state.canSignAsOwner ? (
-          <>paste one you minted on <a href="/mandates">/mandates</a></>
+          <>
+            You're signed in as the wallet owner — calls go straight against
+            your own wallet, no mandate needed.
+          </>
         ) : computeDelegate ? (
           <>
             prefilled from your imported delegate mandate{" "}
@@ -179,15 +183,17 @@ export function Image() {
           void submit();
         }}
       >
-        <label>
-          <span>Mandate ID</span>
-          <input
-            type="text"
-            value={mandateId}
-            onChange={(e) => setMandateId(e.target.value)}
-            placeholder="mandate:01H8XYZ..."
-          />
-        </label>
+        {!state.canSignAsOwner && (
+          <label>
+            <span>Mandate ID</span>
+            <input
+              type="text"
+              value={mandateId}
+              onChange={(e) => setMandateId(e.target.value)}
+              placeholder="mandate:01H8XYZ..."
+            />
+          </label>
+        )}
         <label>
           <span>Model</span>
           <select
@@ -264,7 +270,14 @@ export function Image() {
           (debited up-front; refunded in full if the provider call fails).
         </p>
         <div className="row">
-          <button type="submit" disabled={busy || !prompt || !mandateId}>
+          <button
+            type="submit"
+            disabled={
+              busy ||
+              !prompt ||
+              (!state.canSignAsOwner && !mandateId)
+            }
+          >
             {busy ? "Generating…" : "Generate"}
           </button>
         </div>
