@@ -4,7 +4,7 @@
 // Description → robot-design proposal.
 //
 // Given a free-text description of a website or business, ask Claude
-// Opus 4.7 (text mode) to act as a brand-mascot art director and propose
+// Opus 4.6 (text mode) to act as a brand-mascot art director and propose
 // a robot design that respects a fixed BUST framing spec:
 //
 //   - a paragraph-length `visualBrief` describing the robot's
@@ -20,7 +20,10 @@
 // of framing knowledge — the parts that VARY with the design (bust
 // termination shape, arm choice + arm action).
 //
-// Model: claude-opus-4-7 (best reasoning, single shot, no streaming).
+// Model: claude-opus-4-6 (best reasoning available on the proxy's
+// Bedrock account — Opus 4.7 is provisioned but blocked at the
+// commercial-access tier as of May 2026; AWS Sales request required
+// to unlock it. 4.6 is functionally close enough for this use case).
 
 import type { AithosSDK } from "@aithos/sdk";
 
@@ -185,13 +188,14 @@ export async function designRobotFromDescription(
     throw new Error("description is too short — please write at least one sentence about the brand");
   }
 
-  console.log("[design-agent] calling Opus 4.7 (text)…");
+  console.log("[design-agent] calling Opus 4.6 (text)…");
   const t0 = performance.now();
-  // Cast: claude-opus-4-7 landed in @aithos/sdk alpha.18; the installed
+  // Cast: claude-opus-4-6 landed in @aithos/sdk alpha.18; the installed
   // version may be older. The server-side allowlist is what matters
-  // for security.
+  // for security. (Opus 4.7 is provisioned on the proxy account but
+  // commercial access still requires an AWS Sales unlock — May 2026.)
   const r = await sdk.compute.invokeBedrock({
-    model: "claude-opus-4-7" as "claude-sonnet-4-6",
+    model: "claude-opus-4-6" as "claude-sonnet-4-6",
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: USER_PROMPT_PREFIX + description.trim() }],
     maxTokens: 1600,
