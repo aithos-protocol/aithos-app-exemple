@@ -127,7 +127,10 @@ export function Mandates() {
 const ALL_MODELS = [
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest (text)" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — balanced (text)" },
-  { id: "claude-opus-4-7", label: "Claude Opus 4.7 — best (text)" },
+  // Opus 4.7 is provisioned on the proxy account but commercial access
+  // is gated behind an AWS Sales unlock (as of May 2026). Opus 4.6 is
+  // the strongest model currently invocable.
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6 — best (text)" },
   { id: "image:flux-schnell", label: "FLUX Schnell — cheapest (image)" },
   { id: "image:flux-dev", label: "FLUX Dev — balanced (image)" },
   { id: "image:flux-pro-1.1", label: "FLUX Pro 1.1 — best general (image)" },
