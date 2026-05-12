@@ -5,6 +5,10 @@
 //
 // Front-end flow:
 //
+//   0. Analyse from URL (OPTIONAL): paste a URL, Sonnet fetches it via
+//                            Anthropic's web_fetch tool and produces a
+//                            brand description that lands in the
+//                            textarea of step 1.
 //   1. Describe the brand:   free-text textarea + 'Generate design'
 //                            → Sonnet 4.6 (text) proposes a robot
 //                              visualBrief + 3-colour palette as JSON.
@@ -55,6 +59,7 @@ import {
   type DesignProposal,
 } from "../lib/design-agent.js";
 import { canvasToBlob } from "../lib/image-pipeline.js";
+import { analyzeUrl, type UrlAnalysis } from "../lib/url-analyzer.js";
 import {
   applyTreatmentToLogo,
   judgeCompositeHarmony,
@@ -175,6 +180,12 @@ export function BrandedRobot() {
   const { sdk, state } = useSdk();
 
   // --- Design state ---
+  // --- URL analyzer state (optional pre-step → fills the description) ---
+  const [urlInput, setUrlInput] = useState<string>("");
+  const [urlAnalyzing, setUrlAnalyzing] = useState(false);
+  const [urlAnalysis, setUrlAnalysis] = useState<UrlAnalysis | null>(null);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
   const [description, setDescription] = useState<string>("");
   const [designRunning, setDesignRunning] = useState(false);
   const [designProposal, setDesignProposal] = useState<DesignProposal | null>(null);
@@ -321,6 +332,23 @@ export function BrandedRobot() {
   }
 
   // -------- handlers -----------------------------------------------------
+
+  const runUrlAnalyze = async () => {
+    setUrlAnalyzing(true);
+    setUrlError(null);
+    setUrlAnalysis(null);
+    try {
+      const r = await analyzeUrl(sdk, urlInput);
+      setUrlAnalysis(r);
+      // Auto-inject into the description textarea; the operator can
+      // tweak before clicking 'Generate design'.
+      setDescription(r.description);
+    } catch (e) {
+      setUrlError(formatError(e));
+    } finally {
+      setUrlAnalyzing(false);
+    }
+  };
 
   const runDesign = async () => {
     setDesignRunning(true);
@@ -556,6 +584,82 @@ export function BrandedRobot() {
         falls back to a bare robot if the logo doesn't sit well. The
         operator can override anything via the Step 4 sliders.
       </p>
+
+      {/* ===================== Analyse from URL (optional pre-step) ===================== */}
+      <section style={stepStyle}>
+        <h3>Optional — Analyse from URL</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          Skip the typing : drop a URL, Sonnet fetches the page via
+          Anthropic's <code>web_fetch</code> tool and produces a brand
+          description that lands in the textarea below. You can still
+          edit it before generating the design.
+        </p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            type="url"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            placeholder="https://example.com"
+            spellCheck={false}
+            style={{
+              flex: 1,
+              fontFamily: "ui-monospace, monospace",
+              fontSize: "0.9em",
+              padding: "6px 10px",
+              border: "1px solid #ccc",
+              borderRadius: 4,
+            }}
+            disabled={urlAnalyzing}
+          />
+          <button
+            type="button"
+            onClick={() => void runUrlAnalyze()}
+            disabled={urlAnalyzing || urlInput.trim().length < 8}
+          >
+            {urlAnalyzing
+              ? "Fetching…"
+              : urlAnalysis
+                ? "Re-analyse"
+                : "Analyse site"}
+          </button>
+        </div>
+        {urlError && (
+          <div className="error" style={{ marginTop: 8 }}>{urlError}</div>
+        )}
+        {urlAnalysis && (
+          <dl className="kvtable" style={{ marginTop: 12, fontSize: "0.85em" }}>
+            <dt>URLs fetched</dt>
+            <dd>
+              {urlAnalysis.urlsFetched.length === 0 ? (
+                <em>none reported</em>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {urlAnalysis.urlsFetched.map((u, i) => (
+                    <li key={i}>
+                      <code>{u.url}</code>
+                      {u.title && <span style={{ color: "#888" }}> — {u.title}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </dd>
+            <dt>Citations</dt>
+            <dd>
+              {urlAnalysis.citations.length === 0
+                ? <em>none</em>
+                : `${urlAnalysis.citations.length} span(s)`}
+            </dd>
+            <dt>web_fetch invocations</dt>
+            <dd>{urlAnalysis.webFetchInvocations}</dd>
+            <dt>Cost</dt>
+            <dd>{urlAnalysis.creditsSpent.toLocaleString()} mc</dd>
+          </dl>
+        )}
+        <p style={{ fontSize: "0.75em", color: "#888", marginTop: 8 }}>
+          Auto-injected into the &laquo; Describe the brand &raquo;
+          textarea below on success. Editable.
+        </p>
+      </section>
 
       {/* ===================== Describe the brand ===================== */}
       <section style={stepStyle}>
