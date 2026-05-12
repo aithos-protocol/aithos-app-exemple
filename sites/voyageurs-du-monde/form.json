@@ -1,0 +1,249 @@
+{
+  "site": "Voyageurs du Monde",
+  "url": "https://www.voyageursdumonde.fr",
+  "form_url": "https://www.voyageursdumonde.fr/voyage-sur-mesure/demandedevis/demandedevisopti1",
+  "form_action": "/voyage-sur-mesure/demandedevis/demandedevisopti2",
+  "form_method": "post",
+  "form_title": "Faites créer votre voyage",
+  "form_intro": "Faites-nous part de vos envies, un conseiller spécialiste vous contactera dans les meilleurs délais.",
+  "sections": [
+    "Votre voyage",
+    "Vos informations personnelles"
+  ],
+  "fields": [
+    {
+      "name": "destination",
+      "label": "Destination",
+      "type": "select",
+      "required": true,
+      "section": "Votre voyage",
+      "placeholder": "Choisissez votre destination ...",
+      "searchable": true,
+      "options_count": 148,
+      "options": [
+        "Afrique du Sud",
+        "Albanie",
+        "Algérie",
+        "Allemagne",
+        "Anguilla",
+        "Antarctique",
+        "Antigua",
+        "Arabie saoudite",
+        "Argentine",
+        "Arménie",
+        "Australie",
+        "Autriche",
+        "Azerbaïdjan",
+        "Bahamas",
+        "Barbade",
+        "Belgique",
+        "Belize",
+        "Bhoutan",
+        "Birmanie",
+        "Bolivie",
+        "Bosnie-Herzégovine",
+        "Botswana",
+        "Brésil",
+        "Bulgarie",
+        "Cambodge",
+        "Canada",
+        "Cap Vert",
+        "Chili",
+        "Chine",
+        "Chypre",
+        "... (148 destinations au total — liste complète à fetch en live)"
+      ],
+      "note": "Les valeurs sont des codes ISO-3 pays (ex. ZAF, ALB, DZA). Liste triée par ordre alphabétique français à partir de l'option placeholder."
+    },
+    {
+      "name": "date_depart",
+      "label": "Date de départ",
+      "type": "date",
+      "required": true,
+      "section": "Votre voyage",
+      "placeholder": "jj/mm/aaaa",
+      "format": "ISO yyyy-mm-dd envoyé via champ caché DateDepart, valeur visible au format jj/mm/aaaa",
+      "widget": "datepicker custom (popover)"
+    },
+    {
+      "name": "duree",
+      "label": "Durée du voyage",
+      "type": "number",
+      "required": true,
+      "section": "Votre voyage",
+      "placeholder": "10",
+      "unit": "jours",
+      "min": 1,
+      "max": 999,
+      "widget": "number stepper (boutons +/-)"
+    },
+    {
+      "name": "nombre_passagers",
+      "label": "Nombre de passagers",
+      "type": "text",
+      "required": true,
+      "section": "Votre voyage",
+      "readonly": true,
+      "widget": "popover composé décomposant en NombreAdultes et NombreEnfants",
+      "subfields": [
+        {
+          "name": "nombre_adultes",
+          "label": "Adultes",
+          "type": "number",
+          "required": true,
+          "min": 0,
+          "max": 12
+        },
+        {
+          "name": "nombre_enfants",
+          "label": "Enfants",
+          "type": "number",
+          "required": true,
+          "min": 0,
+          "max": 12
+        }
+      ]
+    },
+    {
+      "name": "projet",
+      "label": "Détaillez-nous vos envies pour ce voyage",
+      "type": "textarea",
+      "required": true,
+      "section": "Votre voyage",
+      "placeholder": "Vous pouvez préciser vos envies et souhaits particuliers : rythme, ambiance, activités…etc",
+      "rows": 4,
+      "cols": 20
+    },
+    {
+      "name": "civilite",
+      "label": "Civilité",
+      "type": "radio",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "default": "1",
+      "options": [
+        { "value": "1", "label": "M" },
+        { "value": "2", "label": "MME" }
+      ]
+    },
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "maxlength": 38,
+      "autocomplete": "family-name"
+    },
+    {
+      "name": "prenom",
+      "label": "Prénom",
+      "type": "text",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "maxlength": 38,
+      "autocomplete": "given-name"
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "maxlength": 50,
+      "autocomplete": "email",
+      "pattern": "[^@\\s]+@[^@\\s]+\\.[^@\\s]+"
+    },
+    {
+      "name": "telephone",
+      "label": "Téléphone",
+      "type": "tel",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "maxlength": 20,
+      "autocomplete": "tel",
+      "help": "Indicatif pays requis (widget intl-tel-input — message d'erreur : 'Sélectionner un indicatif')"
+    },
+    {
+      "name": "code_postal",
+      "label": "Code Postal",
+      "type": "text",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "maxlength": 10,
+      "autocomplete": "postal-code"
+    },
+    {
+      "name": "pays",
+      "label": "Pays de résidence",
+      "type": "select",
+      "required": true,
+      "section": "Vos informations personnelles",
+      "placeholder": "Choisissez...",
+      "searchable": true,
+      "autocomplete": "country",
+      "options_count": 244,
+      "options": [
+        "France",
+        "Belgique",
+        "Canada",
+        "Suisse",
+        "Afrique du Sud",
+        "Aland",
+        "Albanie",
+        "Algérie",
+        "Allemagne",
+        "Andorre",
+        "Angola",
+        "Anguilla",
+        "Antarctique",
+        "Antigua",
+        "Antilles Néerlandaises",
+        "Arabie saoudite",
+        "Argentine",
+        "Arménie",
+        "Aruba",
+        "Australie",
+        "Autriche",
+        "Azerbaïdjan",
+        "Bahamas",
+        "Bahreïn",
+        "Bangladesh",
+        "Barbade",
+        "Belize",
+        "Bénin",
+        "Bermudes",
+        "Bhoutan",
+        "... (244 pays au total — liste complète à fetch en live)"
+      ],
+      "note": "Les 4 premières options sont mises en avant (France, Belgique, Canada, Suisse), suivies du reste trié alphabétiquement. Valeurs = codes ISO-3."
+    },
+    {
+      "name": "je_ne_m_oppose_pas_a_recevoir_des_offres_et_actualites",
+      "label": "Je ne m'oppose pas à recevoir par email les lettres d'actualité de Voyageurs du monde. Je garde la possibilité de me désinscrire à tout moment via le lien présent dans chacune de ces newsletters.",
+      "type": "checkbox",
+      "required": false,
+      "default": true,
+      "value_when_checked": "true",
+      "note": "Opt-out implicite (case pré-cochée)"
+    }
+  ],
+  "hidden_fields": [
+    { "name": "CodeProduitWeb", "type": "hidden", "purpose": "Code produit web pré-rempli si arrivée depuis fiche produit" },
+    { "name": "Resolution", "type": "hidden", "purpose": "Métrique résolution écran" },
+    { "name": "SourceEntree", "type": "hidden", "purpose": "Métrique source d'entrée" },
+    { "name": "g-recaptcha-response", "type": "hidden", "purpose": "Token reCAPTCHA v3 (site key 6LeFghgqAAAAABYyOl8eSwIGaKAS0Ok81laUWclj, action=submit) injecté avant submit" }
+  ],
+  "submit": {
+    "label": "Valider",
+    "mention": "*champs obligatoires",
+    "next_step_url": "/voyage-sur-mesure/demandedevis/demandedevisopti2"
+  },
+  "anti_bot": {
+    "type": "Google reCAPTCHA v3",
+    "site_key": "6LeFghgqAAAAABYyOl8eSwIGaKAS0Ok81laUWclj",
+    "action": "submit"
+  },
+  "branching_logic": "Aucun branching conditionnel dans cette première étape : tous les champs visibles sont affichés simultanément. Le formulaire pointe vers un step 2 (demandedevisopti2) — workflow multi-étapes côté serveur, non visible ici. Le champ NombrePassagers ouvre un popover qui décompose la saisie en Adultes (0-12) et Enfants (0-12), tous deux requis. Le champ DateDepart ouvre un datepicker custom (popover).",
+  "notes": "Form fetché en HTTP brut le 2026-05-11 (la version SPA via web_fetch renvoie du markdown sans le form ; curl HTML brut le contient intégralement). 13 champs visibles requis (sauf newsletter opt-out, qui est checked par défaut) + 4 champs cachés techniques. La destination utilise des codes ISO-3 pays. La liste destinations (148 entrées) est plus courte que la liste pays de résidence (244 entrées) car VDM ne propose pas tous les pays comme destinations. Validation client JS bloque le submit si indicatif téléphonique non sélectionné."
+}

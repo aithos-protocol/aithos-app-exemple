@@ -1,0 +1,202 @@
+{
+  "site": "Notes de Styles",
+  "url": "https://www.notesdestyles.com",
+  "form_url": "https://www.notesdestyles.com/mon-devis/",
+  "fields": [
+    {
+      "name": "type_projet",
+      "label": "Sélectionnez le type de projet qui vous correspond le mieux",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Je souhaite rénover mon bien",
+        "Je souhaite agrandir mon bien",
+        "Je souhaite aménager mes combles",
+        "Je souhaite une rénovation énergétique"
+      ],
+      "help": "Hub /mon-devis/ : chaque choix mène à un questionnaire dédié (rénovation, extension, combles, rénovation énergétique). Le formulaire de contact ci-dessous (avec seulement le sélecteur d'agence + coordonnées) est une alternative si l'utilisateur ne veut pas passer par le questionnaire de qualification."
+    },
+    {
+      "name": "besoin_aide",
+      "label": "En quoi Notes de Styles peut vous aider pour votre rénovation ?",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Je souhaite des plans, 3D, des documents administratifs ou un permis de construire",
+        "J'ai besoin d'un estimatif travaux",
+        "Je recherche quelqu'un pour suivre mon chantier de rénovation",
+        "Je recherche une prestation complète (conception et suivi des travaux)",
+        "Je recherche des conseils et inspirations",
+        "Je ne sais pas exactement"
+      ],
+      "help": "Étape 1 du questionnaire de rénovation. « Sélectionnez la situation qui décrit le mieux votre projet ». Le libellé exact varie selon le questionnaire (rénovation / extension / combles / rénovation énergétique).",
+      "conditional": "type_projet sélectionné"
+    },
+    {
+      "name": "type_travaux",
+      "label": "Quel type de projet souhaitez-vous ?",
+      "type": "checkbox",
+      "required": true,
+      "multiple": true,
+      "options": [
+        "Rénovation partielle",
+        "Rénovation complète",
+        "Rénovation énergétique",
+        "Construction",
+        "Aménagement extérieur",
+        "Agencement intérieur",
+        "Prestation déco (mobilier et déco)"
+      ],
+      "help": "Étape 2. « Sélectionnez un ou plusieurs éléments qui décrivent le mieux votre projet ». Champ obligatoire, sélection multiple."
+    },
+    {
+      "name": "type_bien",
+      "label": "Quel est le bien concerné pour ce projet de rénovation ?",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Appartement",
+        "Maison",
+        "Bien professionnel",
+        "Autre"
+      ],
+      "help": "Étape 3."
+    },
+    {
+      "name": "surface_connue",
+      "label": "Quelle est la surface du bien à rénover ?",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Je connais la surface de mon bien",
+        "Je ne connais pas la surface de mon bien"
+      ],
+      "help": "Étape 4. Si « Je connais la surface », un champ numérique en m² est probablement révélé (saisie conditionnelle non visible dans le HTML statique car généré en JS)."
+    },
+    {
+      "name": "surface_m2",
+      "label": "Surface du bien (en m²)",
+      "type": "number",
+      "required": false,
+      "conditional": "surface_connue == 'Je connais la surface de mon bien'",
+      "help": "Champ numérique conditionnel, révélé après sélection de l'option « Je connais la surface »."
+    },
+    {
+      "name": "delai_debut",
+      "label": "Quand souhaitez-vous commencer les travaux de rénovation ?",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "D'ici 3 mois",
+        "Entre 3 à 6 mois",
+        "Dans 6 mois ou plus"
+      ],
+      "help": "Étape 5. « Sélectionnez le délai sous lequel vous souhaitez commencer vos travaux »."
+    },
+    {
+      "name": "budget",
+      "label": "Quel est votre budget pour votre projet ?",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Moins de 10 000€",
+        "Entre 10 000€ et 30 000€",
+        "Entre 30 000€ et 50 000€",
+        "Entre 50 000€ et 100 000€",
+        "Entre 100 000€ et 250 000€",
+        "Plus de 250 000€",
+        "Je n'ai pas d'idée précise concernant mon budget"
+      ],
+      "help": "Étape 6."
+    },
+    {
+      "name": "description_projet",
+      "label": "Voulez-vous décrire plus en détail votre projet de rénovation ?",
+      "type": "textarea",
+      "required": false,
+      "help": "Étape 7 - champ libre optionnel."
+    },
+    {
+      "name": "agence",
+      "label": "Sélectionnez l'agence Notes de Styles que vous souhaitez contacter",
+      "type": "select",
+      "required": true,
+      "options": [
+        "Notes de Styles, Annecy",
+        "Notes de Styles, Avignon",
+        "Notes de Styles, Bayonne",
+        "Notes de Styles, Biarritz",
+        "Notes de Styles, Bordeaux",
+        "Notes de Styles, Colmar",
+        "Notes de Styles, Côtes-d'Armor",
+        "Notes de Styles, Dijon",
+        "Notes de Styles, Essonne",
+        "Notes de Styles, Gers",
+        "Notes de Styles, Grenoble",
+        "Notes de Styles, Le Puy-en-Velay",
+        "Notes de Styles, Lille",
+        "Notes de Styles, Lyon",
+        "Notes de Styles, Marne-La-Vallée",
+        "Notes de Styles, Marseille",
+        "Notes de Styles, Metz",
+        "Notes de Styles, Montpellier",
+        "Notes de Styles, Nancy",
+        "Notes de Styles, Narbonne",
+        "Notes de Styles, Nice",
+        "Notes de Styles, Nîmes",
+        "Notes de Styles, Nord-pas-de-Calais",
+        "Notes de Styles, Perpignan",
+        "Notes de Styles, Rennes",
+        "Notes de Styles, Saint-Etienne",
+        "Notes de Styles, Strasbourg",
+        "Notes de Styles, Toulon",
+        "Notes de Styles, Toulouse",
+        "Notes de Styles, Yvelines"
+      ],
+      "help": "Sélecteur d'agence présent à la fois sur le formulaire de contact de /mon-devis/ et à la fin du questionnaire détaillé. 30 agences listées (la home dit « Nos 25 agences » mais le menu/nav et le select listent 31 villes au total ; le select agrège plusieurs entrées sous un même département - Saint-Raphaël et Marne-la-Vallée notamment manquent dans le select alors qu'ils sont dans le menu)."
+    },
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true,
+      "help": "Champ standard du formulaire de contact final. Non explicitement visible dans le HTML extrait (rendu en JS) mais standard pour un formulaire de devis WordPress."
+    },
+    {
+      "name": "prenom",
+      "label": "Prénom",
+      "type": "text",
+      "required": true,
+      "help": "Champ standard du formulaire de contact final."
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "required": true,
+      "help": "Champ standard du formulaire de contact final."
+    },
+    {
+      "name": "telephone",
+      "label": "Téléphone",
+      "type": "tel",
+      "required": true,
+      "help": "Champ standard du formulaire de contact final."
+    },
+    {
+      "name": "code_postal",
+      "label": "Code postal",
+      "type": "text",
+      "required": false,
+      "help": "Champ probable pour orienter vers la bonne agence (non visible explicitement dans le HTML statique)."
+    },
+    {
+      "name": "consentement_rgpd",
+      "label": "En soumettant ce formulaire, j'accepte que mes informations soient utilisées uniquement dans le cadre de ma demande et de la relation commerciale éthique et personnalisée qui peut en découler.",
+      "type": "checkbox",
+      "required": true,
+      "help": "Case de consentement RGPD obligatoire avant envoi. Renvoie vers /mentions-legales pour exercer les droits."
+    }
+  ],
+  "notes": "La page /mon-devis/ est un hub : 4 boutons mènent à 4 questionnaires multi-étapes dédiés (/jai-un-projet-de-renovation/, /jai-un-projet-dextension/, /jai-un-projet-damenagement-de-combles/, /jai-un-projet-de-renovation-energetique/). Chaque questionnaire suit la même structure de 7 étapes : besoin/aide, type de travaux (multi-choix), type de bien, surface, délai, budget, description libre - puis bloc commun coordonnées + agence + RGPD. Le HTML montre l'indicateur « 13% » de progression, confirmant un wizard JS multi-étapes. La page /mon-devis/ propose aussi un formulaire de contact court (alternative) avec uniquement le sélecteur d'agence + coordonnées + RGPD. Aucun champ « style décoratif » (moderne / scandinave / industriel etc.) n'est demandé dans le questionnaire : la qualification porte sur le type de travaux, le bien, la surface, le délai et le budget. Le réseau compte 31 villes dans le menu de navigation mais le select d'agences en liste 30 (Saint-Raphaël est dans le menu mais pas dans le select, et les deux entrées Nord-pas-de-Calais/Lille sont regroupées différemment). Soumission : POST AJAX (datalayer GTM commenté « //Datalayers_form » en bas de page). Pas d'upload de fichier dans le formulaire. Réponse SLA annoncée : « Expertise & devis gratuit en 72h »."
+}

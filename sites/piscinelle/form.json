@@ -1,0 +1,530 @@
+{
+  "site": "Piscinelle",
+  "url": "https://www.piscinelle.com",
+  "form_url": "https://www.piscinelle.com/tarifs",
+  "fields": [
+    {
+      "name": "modele",
+      "label": "Forme / Modèle de piscine",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "La piscine rectangulaire Cr",
+        "La piscine carrée Bo",
+        "Le couloir de nage Cn",
+        "La piscine courbe Ds",
+        "Le couloir de nage XS Iki",
+        "La piscine aux proportions divines Or"
+      ],
+      "help": "Étape 1 du configurateur : choisir la forme. Le configurateur couvre 6 modèles. Field HTML probable : config[modele]."
+    },
+    {
+      "name": "dimensions_longueur",
+      "label": "Longueur (m)",
+      "type": "range",
+      "required": true,
+      "help": "Étape 2 : dimensions continues, plage dépend du modèle choisi (sliders). Field HTML probable : config[dimensions][longueur]."
+    },
+    {
+      "name": "dimensions_largeur",
+      "label": "Largeur (m)",
+      "type": "range",
+      "required": true,
+      "help": "Étape 2 : dimensions continues, plage dépend du modèle choisi. Field HTML probable : config[dimensions][largeur]."
+    },
+    {
+      "name": "dimensions_profondeur",
+      "label": "Profondeur (m)",
+      "type": "range",
+      "required": false,
+      "help": "Étape 2 : profondeur (selon modèle). Field HTML probable : config[dimensions][profondeur]."
+    },
+    {
+      "name": "option_couleur_eau",
+      "label": "Couleur de l'eau (liner)",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Bleu clair",
+        "Bleu adriatique",
+        "Vert argile",
+        "Sable",
+        "Blanc",
+        "Gris clair",
+        "Gris ardoise",
+        "Noir",
+        "Marbré bleu"
+      ],
+      "help": "Famille d'options : couleur du liner. Field HTML probable : config[options][couleur_eau]."
+    },
+    {
+      "name": "option_acces_piscine",
+      "label": "Accès à la piscine",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Escabanc",
+        "Échelle (inox poli brillant 304L)"
+      ],
+      "help": "Famille d'options : escalier/échelle d'accès. Field HTML probable : config[options][acces]."
+    },
+    {
+      "name": "option_margelles",
+      "label": "Margelles",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Margelles design plus",
+        "Margelles classique",
+        "Sans margelle"
+      ],
+      "help": "Famille d'options : margelles (coping). Field HTML probable : config[options][margelles]."
+    },
+    {
+      "name": "option_chauffage",
+      "label": "Chauffage de l'eau",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": [
+        "Pompe à chaleur",
+        "Réchauffeur"
+      ],
+      "help": "Famille d'options : chauffage. Field HTML probable : config[options][chauffage]."
+    },
+    {
+      "name": "option_couvertures_alarme",
+      "label": "Couvertures et alarme",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": [
+        "Couverture solaire",
+        "Couverture d'hiver",
+        "Couverture de sécurité à barres",
+        "Rolling-Deck",
+        "Volet immergé",
+        "Volet hors-sol",
+        "Aqualarm V2"
+      ],
+      "help": "Famille d'options : couvrir/sécuriser. Field HTML probable : config[options][couvertures]."
+    },
+    {
+      "name": "option_eclairage_decoration",
+      "label": "Éclairage et décoration",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": [
+        "Projecteur à leds blanc",
+        "Projecteur à leds couleur"
+      ],
+      "help": "Famille d'options : projecteurs LED. Field HTML probable : config[options][eclairage]."
+    },
+    {
+      "name": "option_traitement_eau",
+      "label": "Entretien et traitement de l'eau",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": [
+        "Regul pH auto",
+        "Traitement automatique au brome",
+        "Electrolyseur",
+        "Robot Dolphin S200"
+      ],
+      "help": "Famille d'options : traitement de l'eau. Filtration traditionnelle incluse de série. Field HTML probable : config[options][traitement]."
+    },
+    {
+      "name": "option_fitness_bien_etre",
+      "label": "Fitness & bien-être",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": [
+        "Nage à contre courant",
+        "Aquabike"
+      ],
+      "help": "Famille d'options : équipements fitness. Field HTML probable : config[options][fitness]."
+    },
+    {
+      "name": "option_terrasse",
+      "label": "Terrasse",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Terrasse en ipé",
+        "Terrasse en cumaru",
+        "Terrasse en sapin"
+      ],
+      "help": "Famille d'options : essence de bois de terrasse. Field HTML probable : config[options][terrasse]."
+    },
+    {
+      "name": "option_terrasse_m2",
+      "label": "Surface terrasse (m²)",
+      "type": "number",
+      "required": false,
+      "help": "Surface de la terrasse en m². Field HTML probable : config[options][terrasse_m2]. Conditional à option_terrasse."
+    },
+    {
+      "name": "option_local_technique",
+      "label": "Local technique & implantation",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": [
+        "Local technique LT2",
+        "Kit Hors-sol"
+      ],
+      "help": "Famille d'options : abri du local technique et renfort hors-sol. Info utile : local idéalement entre 3 et 15 m du plan d'eau, et pas plus d'1 m au-dessus/en dessous du niveau d'eau. Field HTML probable : config[options][local_technique]."
+    },
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "prenom",
+      "label": "Prénom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "required": true
+    },
+    {
+      "name": "telephone",
+      "label": "N° téléphone",
+      "type": "tel",
+      "required": true
+    },
+    {
+      "name": "lieu_implantation",
+      "label": "Lieu d'implantation",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Résidence principale",
+        "Résidence secondaire"
+      ],
+      "help": "Dans le cas d'un projet situé en résidence secondaire, le code postal à renseigner doit être celui de la résidence concernée."
+    },
+    {
+      "name": "pays",
+      "label": "Pays",
+      "type": "select",
+      "required": true,
+      "options": [
+        "AD - ANDORRE",
+        "AE - EMIRATS ARABES UNIS",
+        "AG - ANTIGUA-ET-BARBUDA",
+        "AI - ANGUILLA",
+        "AN - ANTILLES NEERLANDAISES",
+        "AR - ARGENTINE",
+        "AT - AUTRICHE",
+        "AU - AUSTRALIE",
+        "AW - ARUBA",
+        "BA - BOSNIE-HERZEGOVINE",
+        "BB - BARBADE",
+        "BD - BANGLADESH",
+        "BE - BELGIQUE",
+        "BF - BURKINA FASO",
+        "BG - BULGARIE",
+        "BH - BAHREIN",
+        "BI - BURUNDI",
+        "BJ - BENIN",
+        "BM - BERMUDES",
+        "BO - BOLIVIE",
+        "BR - BRESIL",
+        "BS - BAHAMAS",
+        "BW - BOTSWANA",
+        "BY - BELARUS",
+        "BZ - BELIZE",
+        "CA - CANADA",
+        "CD - CONGO (REPUBLIQUE DEMOC.)",
+        "CE - CANARIES",
+        "CF - CENTRAFRICAINE (REP)",
+        "CG - CONGO",
+        "CH - SUISSE",
+        "CI - COTE D IVOIRE",
+        "CL - CHILI",
+        "CM - CAMEROUN",
+        "CN - CHINE",
+        "CO - COLOMBIE",
+        "CR - COSTA RICA",
+        "CU - CUBA",
+        "CY - CHYPRE",
+        "CZ - TCHEQUIE",
+        "DE - ALLEMAGNE",
+        "DJ - DJIBOUTI",
+        "DK - DANEMARK",
+        "DM - DOMINIQUE",
+        "DO - REPUBLIQUE DOMINICAINE",
+        "DZ - ALGERIE",
+        "EC - EQUATEUR",
+        "EE - ESTONIE",
+        "EG - EGYPTE",
+        "ES - ESPAGNE",
+        "ET - ETHIOPIE",
+        "FI - FINLANDE",
+        "FR - FRANCE METROPOLITAINE",
+        "GA - GABON",
+        "GB - ROYAUME-UNI",
+        "GD - GRENADE",
+        "GE - GEORGIE",
+        "GF - GUYANE FRANCAISE",
+        "GH - GHANA",
+        "GI - GIBRALTAR",
+        "GL - GROENLAND",
+        "GM - GAMBIE",
+        "GN - GUINEE",
+        "GP - GUADELOUPE",
+        "GQ - GUINEE EQUATORIALE",
+        "GR - GRECE",
+        "GT - GUATEMALA",
+        "GU - GUERNSEY",
+        "GW - GUINEE-BISSAU",
+        "GY - GUYANA",
+        "HK - HONG-KONG",
+        "HN - HONDURAS",
+        "HR - CROATIE",
+        "HT - HAITI",
+        "HU - HONGRIE",
+        "ID - INDONESIE",
+        "IE - IRLANDE",
+        "IL - ISRAEL",
+        "IN - INDE",
+        "IS - ISLANDE",
+        "IT - ITALIE",
+        "JE - JERSEY",
+        "JM - JAMAIQUE",
+        "JO - JORDANIE",
+        "JP - JAPON",
+        "KE - KENYA",
+        "KH - CAMBODGE",
+        "KM - COMORES",
+        "KN - SAINT-KITTS-ET-NEVIS",
+        "KP - COREE ( REPUBLIQUE POPULAIRE DE)",
+        "KR - COREE DU SUD",
+        "KY - ILES CAYMAN",
+        "KZ - KAZAKHSTAN",
+        "LA - LAOS ( REPUBLIQUE DEMOC P)",
+        "LB - LIBAN",
+        "LC - SAINTE-LUCIE",
+        "LI - LIECHTENSTEIN",
+        "LK - SRI LANKA",
+        "LR - LIBERIA",
+        "LT - LITUANIE",
+        "LU - LUXEMBOURG",
+        "LV - LETTONIE",
+        "MA - MAROC",
+        "MC - MONACO",
+        "MD - MOLDOVA ( REPUBLIQUE DE)",
+        "MG - MADAGASCAR",
+        "MK - REPUBLIQUE DE MACEDOINE",
+        "ML - MALI",
+        "MM - MYANMAR",
+        "MQ - MARTINIQUE",
+        "MR - MAURITANIE",
+        "MS - MONTSERRAT",
+        "MT - MALTE",
+        "MU - MAURICE",
+        "MV - MALDIVES",
+        "MW - MALAWI",
+        "MX - MEXIQUE",
+        "MY - MALAISIE",
+        "MZ - MOZAMBIQUE",
+        "NA - NAMIBIE",
+        "NC - NOUVELLE-CALEDONIE",
+        "NE - NIGER",
+        "NG - NIGERIA",
+        "NI - NICARAGUA",
+        "NL - PAYS-BAS",
+        "NO - NORVEGE",
+        "NZ - NOUVELLE-ZELANDE",
+        "OM - OMAN",
+        "PA - PANAMA",
+        "PE - PEROU",
+        "PF - POLYNESIE",
+        "PH - PHILIPPINES",
+        "PK - PAKISTAN",
+        "PL - POLOGNE",
+        "PM - SAINT-PIERRE-ET-MIQUELON",
+        "PR - PORTO RICO",
+        "PT - PORTUGAL",
+        "PY - PARAGUAY",
+        "RE - REUNION",
+        "RO - ROUMANIE",
+        "RU - RUSSIE",
+        "SA - ARABIE SAOUDITE",
+        "SC - SEYCHELLES",
+        "SD - SOUDAN",
+        "SE - SUEDE",
+        "SG - SINGAPOUR",
+        "SI - SLOVENIE",
+        "SK - SLOVAQUIE",
+        "SL - SIERRA LEONE",
+        "SN - SENEGAL",
+        "SO - SOMALIE",
+        "SR - SURINAME",
+        "TC - ILES TURKS ET CAIQUES",
+        "TD - TCHAD",
+        "TG - TOGO",
+        "TH - THAILANDE",
+        "TN - TUNISIE",
+        "TR - TURQUIE",
+        "TT - TRINITE-ET-TOBAGO",
+        "TW - TAIWAN",
+        "TZ - TANZANIE (REPUBLIQUE-UNIE)",
+        "UA - UKRAINE",
+        "US - ETATS-UNIS",
+        "UY - URUGUAY",
+        "UZ - OUZBEKISTAN",
+        "VC - SAINT-VINCENT-ET-GRENADINES",
+        "VE - VENEZUELA",
+        "VG - ILES VIERGES (BRITANNIQUES)",
+        "VI - ILES VIERGES (E.U.)",
+        "VN - VIETNAM",
+        "VU - VANUATU",
+        "WF - WALLIS ET FUTUNA",
+        "YE - YEMEN",
+        "YT - MAYOTTE",
+        "YU - YOUGOSLAVIE",
+        "ZA - AFRIQUE DU SUD",
+        "ZM - ZAMBIE",
+        "ZR - ZAIRE",
+        "ZW - ZIMBABWE"
+      ],
+      "help": "Sélection par défaut : FR - FRANCE METROPOLITAINE."
+    },
+    {
+      "name": "code_postal",
+      "label": "Code postal",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "ville",
+      "label": "Ville",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "adresse",
+      "label": "Adresse",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "budget",
+      "label": "Votre budget",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Moins de 15 000 €",
+        "De 15 000 € à 30 000 €",
+        "De 30 000 € à 50 000 €",
+        "Plus de 50 000 €"
+      ]
+    },
+    {
+      "name": "installation",
+      "label": "Installation",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Je souhaite monter mon Kit Piscinelle",
+        "Je souhaite faire installer ma Piscinelle"
+      ]
+    },
+    {
+      "name": "description_projet",
+      "label": "Description de votre projet",
+      "type": "textarea",
+      "required": false
+    },
+    {
+      "name": "source",
+      "label": "Comment nous avez-vous connu ?",
+      "type": "select",
+      "required": true,
+      "options": [
+        "Amis/Famille",
+        "Pinterest",
+        "Instagram",
+        "Internet",
+        "Presse",
+        "Autre"
+      ]
+    },
+    {
+      "name": "projet_defini",
+      "label": "Votre projet est-il déjà bien défini ?",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "J'ai une idée précise (terrain, budget, modèle)",
+        "Je compare et j'affine mon projet",
+        "Je débute mes recherches"
+      ]
+    },
+    {
+      "name": "contact_preference",
+      "label": "Où en êtes-vous de votre projet ? (préférence de contact)",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Je me renseigne et ne souhaite pas être recontacté pour le moment.",
+        "J'accepte d'être contacté par mon conseiller Piscinelle pour évoquer mon projet."
+      ]
+    },
+    {
+      "name": "rdv_preference",
+      "label": "Prise de rendez-vous",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Je ne souhaite pas prendre de rendez-vous pour le moment.",
+        "Je souhaite définir tout de suite un créneau pour un RDV pour réaliser une étude d'implantation avec mon conseiller Piscinelle."
+      ],
+      "conditional": "Visible si contact_preference = 'J'accepte d'être contacté...'"
+    },
+    {
+      "name": "rdv_type",
+      "label": "Type de rendez-vous",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "physique",
+        "téléphonique"
+      ],
+      "conditional": "Visible si rdv_preference = souhaite définir un créneau."
+    },
+    {
+      "name": "rdv_creneau",
+      "label": "Créneau de rendez-vous",
+      "type": "select",
+      "required": true,
+      "options": [
+        "9h",
+        "11h",
+        "14h",
+        "17h",
+        "19h"
+      ],
+      "help": "Grille horaire (jour x heure) proposée par le conseiller. Conditional : visible si rdv_preference = souhaite définir un créneau. Message si aucun créneau : conseiller notifié par email.",
+      "conditional": "Visible si rdv_preference = souhaite définir un créneau."
+    },
+    {
+      "name": "newsletter_optin",
+      "label": "Je souhaite recevoir les tendances, inspirations et tarifs de la part de Piscinelle.",
+      "type": "checkbox",
+      "required": false
+    }
+  ],
+  "notes": "Configurateur multi-étapes (1. Forme, 2. Dimensions, 3. Options) suivi d'un formulaire de coordonnées pour récupérer le prix par email. Le calcul du prix est immédiat à l'écran ; le formulaire sert à transmettre la demande au conseiller régional. 6 modèles de piscines, dimensions continues (sliders dépendant du modèle), 10 familles d'options principales (couleur eau, accès, margelles, chauffage, couvertures/alarme, éclairage, traitement eau, fitness, terrasse, local technique) regroupant ~32 options. Le prix excluant l'installation est annoncé en TTC mensualisé sans apport et en comptant. Les champs HTML suivent le pattern config[modele], config[dimensions][...], config[options][famille]. Boutons de soumission : 'Calculer le prix de ma configuration', 'Obtenir les coordonnées', 'Posez votre question', 'Valider'. Plusieurs formulaires secondaires existent (catalogue gratuit, rénovation, VIP, financement) avec les mêmes champs de base ; ici on documente le formulaire principal devis/configurateur."
+}

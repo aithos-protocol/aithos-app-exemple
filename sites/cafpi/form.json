@@ -1,0 +1,954 @@
+{
+  "site": "CAFPI",
+  "url": "https://www.cafpi.fr",
+  "form_url": "https://www.cafpi.fr/credit-immobilier/demande-pret",
+  "form_title": "Demande de prêt immobilier",
+  "form_intro": "Réalisez votre demande de prêt en quelques clics. Trouver le meilleur taux pour votre projet immobilier, c'est rapide et facile, avec CAFPI, courtier en crédit.",
+  "form_legal_warning": "Un crédit vous engage et doit être remboursé. Vérifiez vos capacités de remboursement avant de vous engager.",
+  "sections": [
+    {
+      "id": "part-1",
+      "label": "Votre projet",
+      "menus": [
+        "Nature",
+        "Type",
+        "Localisation",
+        "Bien actuel",
+        "État",
+        "État (souscription)"
+      ]
+    },
+    {
+      "id": "part-2",
+      "label": "Votre financement",
+      "menus": [
+        "Besoin",
+        "Situation professionnelle (Emprunteur / Co-emprunteur)",
+        "Revenus (Principaux / Co-emprunteur / Autres revenus)",
+        "Charges"
+      ]
+    },
+    {
+      "id": "part-3",
+      "label": "Vos coordonnées",
+      "menus": [
+        "Identité (État civil / Foyer / Contact)",
+        "Identité co-emprunteur (État civil / Contact)",
+        "Résidence",
+        "Pour finir"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "name": "p_1_1",
+      "label": "Quel est votre projet ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Nature",
+      "options": [
+        "Acquérir un bien",
+        "Faire construire",
+        "Faire des travaux",
+        "Renégocier mon taux",
+        "Divorce, SCPI, indivision"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_1_2_1",
+      "label": "Quel type de bien souhaitez-vous acquérir ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Type",
+      "conditional": "p_1_1 = Acquérir un bien",
+      "options": [
+        "Une maison",
+        "Un appartement",
+        "Un terrain seul",
+        "Autres"
+      ],
+      "options_help": {
+        "Autres": "Bateau, garage, murs commerciaux"
+      },
+      "verified": true
+    },
+    {
+      "name": "p_1_2_2",
+      "label": "Que souhaitez-vous faire construire ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Type",
+      "conditional": "p_1_1 = Faire construire",
+      "options": [
+        "Construction + terrain",
+        "Construction seule",
+        "VEFA"
+      ],
+      "options_help": {
+        "VEFA": "Vente en l'état futur d'achèvement"
+      },
+      "verified": true
+    },
+    {
+      "name": "p_1_2_3",
+      "label": "Précisez la nature de votre projet",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Type",
+      "conditional": "p_1_1 = Divorce, SCPI, indivision",
+      "options": [
+        "Rachat de soulte",
+        "Parts SCPI",
+        "Prêt de trésorerie hypothécaire",
+        "Autres"
+      ],
+      "options_help": {
+        "Autres": "Prêt professionnel, bateau, péniche"
+      },
+      "notes_per_option": {
+        "Prêt de trésorerie hypothécaire": "Redirige vers /rachat-de-credits/simulation-rachat-credits"
+      },
+      "verified": true
+    },
+    {
+      "name": "p_1_3",
+      "label": "Type de bien (état)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Type",
+      "conditional": "p_1_1 = Acquérir un bien ET p_1_2_1 in [Une maison, Un appartement, Autres]",
+      "options": [
+        "Bien neuf",
+        "Bien ancien",
+        "VEFA"
+      ],
+      "options_help": {
+        "Bien neuf": "Bien immobilier construit n'ayant jamais eu d'occupants",
+        "Bien ancien": "Bien immobilier construit ayant déjà eu 1 ou plusieurs occupant(s)",
+        "VEFA": "Vente en l'état futur d'achèvement"
+      },
+      "verified": true
+    },
+    {
+      "name": "p_1_4",
+      "label": "Quelle sera la destination du bien ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Type",
+      "conditional": "p_1_1 in [Acquérir un bien, Faire construire, Faire des travaux]",
+      "options": [
+        "Résidence principale",
+        "Résidence secondaire",
+        "Investissement locatif",
+        "Usage professionnel ou commercial",
+        "Usage mixte"
+      ],
+      "notes_per_option": {
+        "Usage professionnel ou commercial": "Redirige vers /credit-entreprise"
+      },
+      "verified": true
+    },
+    {
+      "name": "p_1_5",
+      "label": "Localisation du projet",
+      "type": "text",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Localisation",
+      "help": "Code postal ou département du bien (champ texte/numérique, options non listées dans la définition publique)",
+      "verified": false
+    },
+    {
+      "name": "p_1_6_1",
+      "label": "Précisions sur la localisation (cas 1)",
+      "type": "text",
+      "required": false,
+      "section": "Votre projet",
+      "step": "1.Localisation",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Faire des travaux] ET p_1_5 = valeur 1",
+      "verified": true,
+      "notes": "Champ texte/numérique sans options (probablement adresse ou ville)"
+    },
+    {
+      "name": "p_1_6_2",
+      "label": "Précisions sur la localisation (cas 2)",
+      "type": "text",
+      "required": false,
+      "section": "Votre projet",
+      "step": "1.Localisation",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Faire des travaux] ET p_1_5 = valeur 2",
+      "verified": true,
+      "notes": "Champ texte/numérique sans options"
+    },
+    {
+      "name": "p_1_7",
+      "label": "Êtes-vous actuellement ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Bien actuel",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Faire des travaux, Divorce/SCPI/indivision]",
+      "options": [
+        "Propriétaire",
+        "Locataire avec bail",
+        "Logé à titre gratuit"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_1_8",
+      "label": "Que comptez-vous faire de votre bien actuel ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.Bien actuel",
+      "conditional": "p_1_1 in [Acquérir, Faire construire] ET p_1_7 = Propriétaire",
+      "options": [
+        "Revente avant achat",
+        "Revente après achat",
+        "Je garde pour louer",
+        "Je garde"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_1_9",
+      "label": "Capital restant dû sur le bien actuel",
+      "type": "number",
+      "required": false,
+      "section": "Votre projet",
+      "step": "1.Bien actuel",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Travaux, Divorce/SCPI] ET p_1_7 = Propriétaire",
+      "verified": true,
+      "notes": "Champ numérique sans options définies — libellé déduit du contexte « bien actuel » d'un propriétaire"
+    },
+    {
+      "name": "p_1_10",
+      "label": "Mensualité du prêt en cours sur le bien actuel",
+      "type": "number",
+      "required": false,
+      "section": "Votre projet",
+      "step": "1.Bien actuel",
+      "unit": "EUR / mois",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Travaux, Divorce/SCPI] ET p_1_7 = Propriétaire",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré"
+    },
+    {
+      "name": "p_1_11",
+      "label": "Valeur estimée du bien actuel",
+      "type": "number",
+      "required": false,
+      "section": "Votre projet",
+      "step": "1.Bien actuel",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Travaux, Divorce/SCPI] ET p_1_7 = Propriétaire",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré"
+    },
+    {
+      "name": "p_1_12_1",
+      "label": "Où en êtes-vous dans votre projet ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.État",
+      "conditional": "p_1_1 in [Acquérir, Faire construire]",
+      "options": [
+        "J'ai signé un compromis",
+        "Je suis sur le point de faire une offre",
+        "Je suis en recherche",
+        "Simple demande de renseignements"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_1_12_2",
+      "label": "Où en êtes-vous dans votre projet ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.État",
+      "conditional": "p_1_1 = Faire des travaux",
+      "options": [
+        "J'ai effectué des devis",
+        "Simple demande de renseignements"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_1_12_3",
+      "label": "Quand souhaitez-vous réaliser ce projet ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.État",
+      "conditional": "p_1_1 = Divorce, SCPI, indivision",
+      "options": [
+        "Immédiat",
+        "À venir"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_1_13",
+      "label": "Vous empruntez ?",
+      "type": "radio",
+      "required": true,
+      "section": "Votre projet",
+      "step": "1.État (souscription)",
+      "options": [
+        "Seul(e)",
+        "À deux"
+      ],
+      "verified": false,
+      "notes": "Options inférées : présent dans les conditions (p_1_13 = 2 ouvre tous les champs co-emprunteur)"
+    },
+    {
+      "name": "p_2_1",
+      "label": "Montant du projet (prix du bien)",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Travaux, Divorce/SCPI]",
+      "verified": true,
+      "notes": "Champ numérique sans options — libellé inféré du contexte « financement_besoin »"
+    },
+    {
+      "name": "p_2_1_1",
+      "label": "Capital restant dû à renégocier",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR",
+      "conditional": "p_1_1 = Renégocier mon taux",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (parcours renégociation)"
+    },
+    {
+      "name": "p_2_1_2",
+      "label": "Taux actuel du prêt",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "%",
+      "conditional": "p_1_1 = Renégocier mon taux",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (parcours renégociation)"
+    },
+    {
+      "name": "p_2_1_3",
+      "label": "Mensualité actuelle",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR / mois",
+      "conditional": "p_1_1 = Renégocier mon taux",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré"
+    },
+    {
+      "name": "p_2_1_4",
+      "label": "Durée restante du prêt",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "années / mois",
+      "conditional": "p_1_1 = Renégocier mon taux",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré"
+    },
+    {
+      "name": "p_2_2_1_1",
+      "label": "Apport personnel",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Acquérir, Faire construire] ET p_1_7 = Propriétaire ET p_1_8 in [Revente après achat, Je garde pour louer, Je garde]",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (variante apport selon situation)"
+    },
+    {
+      "name": "p_2_2_1_2",
+      "label": "Apport personnel",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Acquérir, Faire construire] ET p_1_7 in [Locataire, Logé à titre gratuit]",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (apport locataire/logé)"
+    },
+    {
+      "name": "p_2_2_1_3",
+      "label": "Apport personnel",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Faire des travaux, Divorce/SCPI/indivision]",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (apport pour travaux/divorce)"
+    },
+    {
+      "name": "p_2_2_2",
+      "label": "Produit attendu de la revente",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "EUR",
+      "conditional": "p_1_1 in [Acquérir, Faire construire] ET p_1_7 = Propriétaire ET p_1_8 = Revente avant achat",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré"
+    },
+    {
+      "name": "p_2_2_3",
+      "label": "Durée souhaitée du prêt",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Besoin",
+      "unit": "années",
+      "conditional": "p_1_1 in [Acquérir, Faire construire, Travaux, Divorce/SCPI]",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (durée prêt)"
+    },
+    {
+      "name": "p_2_3",
+      "label": "Situation professionnelle (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Emprunteur",
+      "options": [
+        "Salarié du privé",
+        "Salarié du public",
+        "Profession libérale",
+        "Agriculteur",
+        "Chef d'entreprise",
+        "Artisan / commerçant",
+        "Intermittent",
+        "Retraité",
+        "Sans profession",
+        "Autre"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_3_co",
+      "label": "Situation professionnelle (Co-emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Co-emprunteur",
+      "conditional": "p_1_13 = À deux",
+      "options": [
+        "Salarié du privé",
+        "Salarié du public",
+        "Profession libérale",
+        "Agriculteur",
+        "Chef d'entreprise",
+        "Artisan / commerçant",
+        "Intermittent",
+        "Retraité",
+        "Sans profession",
+        "Autre"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_4_1",
+      "label": "Type de contrat (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Emprunteur",
+      "conditional": "p_2_3 = Salarié du privé",
+      "options": [
+        "CDI hors période d'essai",
+        "CDI en période d'essai",
+        "CDD",
+        "Intérim"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_4_1_co",
+      "label": "Type de contrat (Co-emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Co-emprunteur",
+      "conditional": "p_1_13 = À deux ET p_2_3_co = Salarié du privé",
+      "options": [
+        "CDI hors période d'essai",
+        "CDI en période d'essai",
+        "CDD",
+        "Intérim"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_4_2",
+      "label": "Statut dans la fonction publique (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Emprunteur",
+      "conditional": "p_2_3 = Salarié du public",
+      "options": [
+        "Titulaire",
+        "Non titulaire"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_4_2_co",
+      "label": "Statut dans la fonction publique (Co-emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Co-emprunteur",
+      "conditional": "p_1_13 = À deux ET p_2_3_co = Salarié du public",
+      "options": [
+        "Titulaire",
+        "Non titulaire"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_5",
+      "label": "Ancienneté dans le poste (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Emprunteur",
+      "conditional": "p_2_4_1 in [CDD, Intérim]",
+      "options": [
+        "1 an ou moins",
+        "2 ans",
+        "3 ans et +"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_5_co",
+      "label": "Ancienneté dans le poste (Co-emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Co-emprunteur",
+      "conditional": "p_1_13 = À deux ET p_2_4_1_co in [CDD, Intérim]",
+      "options": [
+        "1 an ou moins",
+        "2 ans",
+        "3 ans et +"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_4_3",
+      "label": "Ancienneté dans l'activité (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Emprunteur",
+      "conditional": "p_2_3 in [Profession libérale, Agriculteur, Chef d'entreprise, Artisan / commerçant, Intermittent]",
+      "options": [
+        "1 an ou moins",
+        "2 ans",
+        "3 ans et +"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_4_3_co",
+      "label": "Ancienneté dans l'activité (Co-emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Situation professionnelle - Co-emprunteur",
+      "conditional": "p_1_13 = À deux ET p_2_3_co in [Profession libérale, Agriculteur, Chef d'entreprise, Artisan / commerçant, Intermittent]",
+      "options": [
+        "1 an ou moins",
+        "2 ans",
+        "3 ans et +"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_2_6",
+      "label": "Revenus mensuels nets (Emprunteur)",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Revenus - Principaux",
+      "unit": "EUR / mois",
+      "verified": false,
+      "notes": "Champ déduit du menu 'financement_revenus_1 — Principaux'. ID exact non capturé dans stepsDefinition (champ texte injecté par le JS de build des étapes)."
+    },
+    {
+      "name": "p_2_6_co",
+      "label": "Revenus mensuels nets (Co-emprunteur)",
+      "type": "number",
+      "required": true,
+      "section": "Votre financement",
+      "step": "2.Revenus - Co-emprunteur",
+      "unit": "EUR / mois",
+      "conditional": "p_1_13 = À deux",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition sans options — champ numérique"
+    },
+    {
+      "name": "p_2_7",
+      "label": "13ème mois / primes annuelles (Emprunteur)",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Revenus - Principaux",
+      "unit": "EUR / an",
+      "verified": false,
+      "notes": "Inféré du menu 'Revenus principaux'. Cafpi demande typiquement le 13e mois en plus du salaire net."
+    },
+    {
+      "name": "p_2_7_co",
+      "label": "13ème mois / primes annuelles (Co-emprunteur)",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Revenus - Co-emprunteur",
+      "unit": "EUR / an",
+      "conditional": "p_1_13 = À deux",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition sans options — champ numérique"
+    },
+    {
+      "name": "p_2_9_1",
+      "label": "Loyers perçus (investissement locatif)",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Revenus - Autres revenus",
+      "unit": "EUR / mois",
+      "conditional": "p_1_4 = Investissement locatif",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (revenus locatifs du nouveau bien)"
+    },
+    {
+      "name": "p_2_9_2",
+      "label": "Loyers perçus (bien actuel conservé pour louer)",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Revenus - Autres revenus",
+      "unit": "EUR / mois",
+      "conditional": "p_1_8 = Je garde pour louer",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré"
+    },
+    {
+      "name": "p_2_11",
+      "label": "Loyer mensuel actuel",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Charges",
+      "unit": "EUR / mois",
+      "conditional": "p_1_7 = Locataire avec bail",
+      "verified": true,
+      "notes": "Champ numérique — libellé inféré (loyer si locataire)"
+    },
+    {
+      "name": "charges_credit_conso",
+      "label": "Crédits en cours (mensualités cumulées)",
+      "type": "number",
+      "required": false,
+      "section": "Votre financement",
+      "step": "2.Charges",
+      "unit": "EUR / mois",
+      "verified": false,
+      "notes": "Inféré du menu 'financement_charges'. Standard CAFPI : crédits conso, auto, etc."
+    },
+    {
+      "name": "p_3_5",
+      "label": "Situation familiale (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - État civil",
+      "options": [
+        "Célibataire",
+        "Concubin",
+        "Marié(e)",
+        "Pacsé(e)",
+        "Veuf(ve)"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_3_1",
+      "label": "Civilité (Emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - État civil",
+      "options": [
+        "Monsieur",
+        "Madame"
+      ],
+      "verified": false,
+      "notes": "Inféré du menu 'coordonnees_identite_1 — État civil'. Options standard CAFPI."
+    },
+    {
+      "name": "p_3_2",
+      "label": "Nom (Emprunteur)",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - État civil",
+      "verified": false,
+      "notes": "Inféré"
+    },
+    {
+      "name": "p_3_3",
+      "label": "Prénom (Emprunteur)",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - État civil",
+      "verified": false,
+      "notes": "Inféré"
+    },
+    {
+      "name": "p_3_4",
+      "label": "Date de naissance (Emprunteur)",
+      "type": "date",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - État civil",
+      "verified": false,
+      "notes": "Inféré"
+    },
+    {
+      "name": "p_3_6",
+      "label": "Nombre d'enfants à charge",
+      "type": "number",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - Foyer",
+      "min": 0,
+      "verified": false,
+      "notes": "Inféré du menu 'coordonnees_identite_2 — Foyer'"
+    },
+    {
+      "name": "p_3_7",
+      "label": "Email (Emprunteur)",
+      "type": "email",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - Contact",
+      "verified": false,
+      "notes": "Inféré du menu 'coordonnees_identite_3 — Contact'"
+    },
+    {
+      "name": "p_3_8",
+      "label": "Téléphone mobile (Emprunteur)",
+      "type": "tel",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité - Contact",
+      "validation": "Format français (variable JS 'phoneFr' présente dans la page)",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition + validation 'phoneFr' confirmée"
+    },
+    {
+      "name": "p_3_1_co",
+      "label": "Civilité (Co-emprunteur)",
+      "type": "radio",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité co-emprunteur - État civil",
+      "conditional": "p_1_13 = À deux",
+      "options": [
+        "Monsieur",
+        "Madame"
+      ],
+      "verified": true,
+      "notes": "Présent dans stepsDefinition sans options listées — civilité inférée"
+    },
+    {
+      "name": "p_3_2_co",
+      "label": "Nom (Co-emprunteur)",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité co-emprunteur - État civil",
+      "conditional": "p_1_13 = À deux",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition"
+    },
+    {
+      "name": "p_3_3_co",
+      "label": "Prénom (Co-emprunteur)",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité co-emprunteur - État civil",
+      "conditional": "p_1_13 = À deux",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition"
+    },
+    {
+      "name": "p_3_4_co",
+      "label": "Date de naissance (Co-emprunteur)",
+      "type": "date",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Identité co-emprunteur - État civil",
+      "conditional": "p_1_13 = À deux",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition"
+    },
+    {
+      "name": "p_3_7_co",
+      "label": "Email (Co-emprunteur)",
+      "type": "email",
+      "required": false,
+      "section": "Vos coordonnées",
+      "step": "3.Identité co-emprunteur - Contact",
+      "conditional": "p_1_13 = À deux",
+      "verified": true,
+      "notes": "Présent dans stepsDefinition"
+    },
+    {
+      "name": "p_3_8_co",
+      "label": "Téléphone (Co-emprunteur)",
+      "type": "tel",
+      "required": false,
+      "section": "Vos coordonnées",
+      "step": "3.Identité co-emprunteur - Contact",
+      "conditional": "p_1_13 = À deux",
+      "validation": "Format français (variable JS 'phoneFr_co')",
+      "verified": true
+    },
+    {
+      "name": "residence_adresse",
+      "label": "Adresse de résidence",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Résidence",
+      "verified": false,
+      "notes": "Inféré du menu 'coordonnees_residence'. Cafpi utilise un autocomplete ville (URL 'cafpi__form__autocomplete_city_url' visible dans la page)."
+    },
+    {
+      "name": "residence_code_postal",
+      "label": "Code postal",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Résidence",
+      "verified": false,
+      "notes": "Inféré"
+    },
+    {
+      "name": "residence_ville",
+      "label": "Ville",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Résidence",
+      "verified": false,
+      "notes": "Inféré (autocomplete)"
+    },
+    {
+      "name": "residence_pays",
+      "label": "Pays",
+      "type": "select",
+      "required": false,
+      "section": "Vos coordonnées",
+      "step": "3.Résidence",
+      "verified": false,
+      "notes": "Inféré (URL 'cafpi__form__autocomplete_country_url' présente dans la page)"
+    },
+    {
+      "name": "p_3_111",
+      "label": "Comment avez-vous connu CAFPI ?",
+      "type": "radio",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Pour finir",
+      "options": [
+        "Via Internet (Google, réseaux sociaux, ...)",
+        "Je suis déjà client",
+        "Professionnel de l'immobilier",
+        "Je suis parrainé",
+        "Autre",
+        "De réputation"
+      ],
+      "verified": true
+    },
+    {
+      "name": "p_3_11_2",
+      "label": "Précisez le professionnel de l'immobilier",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Pour finir",
+      "conditional": "p_3_111 = Professionnel de l'immobilier",
+      "verified": true,
+      "notes": "Champ texte de précision (nom de l'apporteur d'affaires)"
+    },
+    {
+      "name": "p_3_11_3",
+      "label": "Précisez le parrainage",
+      "type": "text",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Pour finir",
+      "conditional": "p_3_111 = Je suis parrainé",
+      "verified": true,
+      "notes": "Champ texte (code parrain ou nom du parrain)"
+    },
+    {
+      "name": "rgpd_consent",
+      "label": "J'accepte que mes données soient utilisées par CAFPI dans le cadre de ma demande",
+      "type": "checkbox",
+      "required": true,
+      "section": "Vos coordonnées",
+      "step": "3.Pour finir",
+      "verified": false,
+      "notes": "Inféré — consentement RGPD obligatoire en fin de funnel"
+    }
+  ],
+  "submission": {
+    "verified_endpoint": false,
+    "notes": "Le formulaire est multi-étapes piloté par JS (cafpi.form.step.build.script.js + cafpi.form.step.submit.script.js). Soumission AJAX progressive — pas d'<form> HTML statique avec action visible. Routing FOS (Symfony) côté serveur (fos.Router)."
+  },
+  "tracking": {
+    "kameleoon": true,
+    "gtm": true,
+    "didomi": "3e61fabc-ecf3-4e20-894b-520f3e86de81",
+    "notes": "GTM events 'CTA formulaire immo' tracés sur chaque CTA 'Je simule mon prêt'."
+  },
+  "notes": "Source vérifiée : variable JS 'stepsDefinition' (51 entrées) extraite du HTML de https://www.cafpi.fr/credit-immobilier/demande-pret le 2026-05-11. Toutes les options de radio/select sont verbatim depuis cette définition. Les libellés des questions (texte d'invite) ne sont PAS dans le HTML initial : ils sont injectés runtime par les scripts JS de build d'étape qui retournent du 404 en accès direct (chemins probablement hashés ou protégés). Les libellés marqués 'verified: false' sont déduits du menu de navigation (sidebar avec data-menuid : projet_nature, financement_besoin, coordonnees_identite_2 — Foyer, etc.) et du standard CAFPI. Les champs purement numériques/texte (sans options dans stepsDefinition) sont listés avec leur ID exact et leur condition d'affichage vérifiée, mais leur libellé exact reste à confirmer en live. Le simulateur léger (/credit-immobilier/simulateur) ne demande que 4-5 champs (montant, revenus, durée, taux, taux assurance, email) et constitue un funnel distinct, non documenté ici. URL canonique du vrai funnel : /credit-immobilier/demande-pret (atteint via tous les CTA 'Je simule mon prêt')."
+}

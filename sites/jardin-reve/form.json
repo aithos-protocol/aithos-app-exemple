@@ -1,0 +1,172 @@
+{
+  "site": "Jardin-Rêve",
+  "url": "https://www.jardin-reve.fr",
+  "form_url": "https://www.jardin-reve.fr/demande-devis.php",
+  "fields": [
+    {
+      "name": "prenom",
+      "label": "Prénom",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "email",
+      "label": "Adresse email",
+      "type": "email",
+      "required": true
+    },
+    {
+      "name": "email_confirm",
+      "label": "Confirmez votre adresse email",
+      "type": "email",
+      "required": true,
+      "help": "Les adresses email doivent être valides et identiques"
+    },
+    {
+      "name": "telephone",
+      "label": "Numéro de téléphone",
+      "type": "tel",
+      "required": true
+    },
+    {
+      "name": "adresse_jardin",
+      "label": "Adresse du jardin",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "pays_jardin",
+      "label": "Pays",
+      "type": "select",
+      "required": true,
+      "options": [
+        "France métropole",
+        "Guadeloupe",
+        "Martinique",
+        "Guyane",
+        "La Réunion",
+        "Mayotte",
+        "Saint-Pierre-et-Miquelon",
+        "Nouvelle-Calédonie",
+        "Polynésie française",
+        "Wallis-et-Futuna",
+        "Saint-Martin",
+        "Saint-Barthélemy",
+        "Belgium",
+        "Luxembourg",
+        "Switzerland",
+        "Monaco",
+        "Canada",
+        "Other (full international dropdown ~90 pays disponibles)"
+      ],
+      "help": "Liste complète des pays disponible ; raccourci ici aux pays francophones + zones DOM-TOM les plus probables"
+    },
+    {
+      "name": "adresse_postale_meme",
+      "label": "Votre adresse est-elle la même que celle du terrain ?",
+      "type": "radio",
+      "required": true,
+      "options": ["Oui", "Non"]
+    },
+    {
+      "name": "adresse_postale",
+      "label": "Adresse postale (si différente)",
+      "type": "text",
+      "required": true,
+      "conditional": "Affiché uniquement si adresse_postale_meme = Non"
+    },
+    {
+      "name": "pays_postale",
+      "label": "Pays (adresse postale)",
+      "type": "select",
+      "required": true,
+      "conditional": "Affiché uniquement si adresse_postale_meme = Non",
+      "options": ["voir pays_jardin pour la liste complète"]
+    },
+    {
+      "name": "surface",
+      "label": "Surface estimée de la zone à aménager (m²)",
+      "type": "number",
+      "required": true
+    },
+    {
+      "name": "offre",
+      "label": "Choisissez une offre",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Oasis Urbaine",
+        "Eden Gourmand",
+        "Ecrin Végétal",
+        "Havre Sauvage",
+        "Equilibre Feng Shui",
+        "Signature Végétale",
+        "Autres besoins"
+      ],
+      "help": "Sélecteur visuel avec vignettes ; un test interactif est proposé en alternative pour aider à choisir"
+    },
+    {
+      "name": "pack",
+      "label": "Choisissez un pack",
+      "type": "radio",
+      "required": true,
+      "options": ["Essentiel", "Immersif", "Signature"],
+      "help": "Sélecteur visuel avec vignettes ; 3 niveaux de profondeur de prestation"
+    },
+    {
+      "name": "options",
+      "label": "Options souhaitées",
+      "type": "checkbox",
+      "required": false,
+      "multiple": true,
+      "options": ["Options spécifiques dépendant de l'offre choisie"]
+    },
+    {
+      "name": "projet",
+      "label": "Décrivez-nous votre projet idéal !",
+      "type": "textarea",
+      "required": true,
+      "help": "Pour que nous puissions comprendre au mieux vos besoins et créer une offre qui vous ressemble parfaitement, prenez quelques minutes pour répondre à ces questions : (1) Qu'aimeriez-vous ressentir dans cet espace ? (apaisement, fierté, convivialité, créativité…) ; (2) Comment imaginez-vous son usage principal ? (accueillir des invités, se détendre, jouer avec vos enfants, potager…) ; (3) Quels styles, plantes ou ambiances vous inspirent ? (Feng Shui, anglais, moderne épuré, permaculture, fleurs colorées, herbes aromatiques, bois, pierre…) ; (4) Avez-vous des contraintes ou préoccupations spécifiques ? (entretien facile, budget, écologie, rapidité…) ; (5) Avez-vous un rêve ou un objectif particulier pour cet espace ? (havre de paix, valeur du bien, espace durable…) ; (6) Votre terrain a-t-il des contraintes particulières ? (pente, implantation d'une piscine…)"
+    },
+    {
+      "name": "newsletter",
+      "label": "Souhaitez-vous recevoir notre newsletter ?",
+      "type": "radio",
+      "required": true,
+      "options": ["Oui", "Non"]
+    },
+    {
+      "name": "code_promo",
+      "label": "Code promo",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "source",
+      "label": "Comment avez-vous connu notre service ?",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Recherche web",
+        "Bouche à oreille",
+        "Réseaux sociaux",
+        "Presse / Blog",
+        "Salon / Événement",
+        "Autre"
+      ]
+    },
+    {
+      "name": "honeypot",
+      "label": "Ne pas remplir ce champ",
+      "type": "honeypot",
+      "required": false
+    }
+  ],
+  "notes": "Formulaire le plus riche du dataset (~20 champs). Le textarea 'projet' contient littéralement 6 questions guidantes — un agent IA peut transformer ces questions en conversation naturelle. Les sélecteurs offre + pack sont visuels (vignettes). Branches conditionnelles pour l'adresse postale alternative. CNIL n°1397135 mentionné dans les conditions."
+}

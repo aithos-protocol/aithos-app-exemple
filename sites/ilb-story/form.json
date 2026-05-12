@@ -1,0 +1,85 @@
+{
+  "site": "ILB Story",
+  "url": "https://www.ilbstory.com",
+  "form_url": "https://www.ilbstory.com/devis-photographe-mariage-lyon.html",
+  "fields": [
+    {
+      "name": "type_evenement",
+      "label": "Vous me contactez pour...",
+      "type": "select",
+      "required": false,
+      "options": [
+        " ------- Votre choix ------- ",
+        "Mariage",
+        "Autres",
+        "Professionnel"
+      ]
+    },
+    {
+      "name": "date_evenement",
+      "label": "Date évènement",
+      "type": "date",
+      "required": false,
+      "help": "Champ composé de 3 selects séparés : jour_evenement (Jour, 01-31), mois_evenement (Mois, Janv, Fév, Mars, Avril, Mai, Juin, Juil, Août, Sept, Oct, Nov, Déc), annee_evenement (Année, 2026, 2027, 2028)"
+    },
+    {
+      "name": "lieu_evenement",
+      "label": "Lieu(x) évènement *",
+      "type": "text",
+      "required": true,
+      "help": "Placeholder : Ville(s), département(s)..."
+    },
+    {
+      "name": "message",
+      "label": "Votre message *",
+      "type": "textarea",
+      "required": true,
+      "help": "Placeholder : Parlez-moi de votre évènement... ; maxlength 5000 ; 10 rows"
+    },
+    {
+      "name": "name",
+      "label": "Votre nom *",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "prenom",
+      "label": "Votre prénom *",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "phone",
+      "label": "Votre téléphone *",
+      "type": "tel",
+      "required": true,
+      "help": "Placeholder : Au format : 0000000000 (input type=text dans le HTML mais sémantiquement un téléphone)"
+    },
+    {
+      "name": "email",
+      "label": "Votre adresse email *",
+      "type": "email",
+      "required": true,
+      "help": "Placeholder : exemple@site.com"
+    },
+    {
+      "name": "connu_par",
+      "label": "Vous m'avez connu par...",
+      "type": "select",
+      "required": false,
+      "options": [
+        " ------- Votre choix ------- ",
+        "Recherche internet",
+        "Amis",
+        "Famille",
+        "Travail ",
+        "Facebook",
+        "Instagram",
+        "Mariage.net",
+        "ZankYou",
+        "Prestataire mariage"
+      ]
+    }
+  ],
+  "notes": "Formulaire mono-page (pas de multi-step), POST vers php/contact-form.php. Aucun CAPTCHA visible dans le HTML, pas de honeypot apparent, pas de champ caché. Le champ date est en réalité composé de 3 <select> distincts (jour_evenement, mois_evenement, annee_evenement) non marqués required. Le champ téléphone utilise input type=text avec validation par placeholder uniquement. Bouton submit : 'C'EST PARTI'. Validation côté client via data-msg-required (jQuery validate probable). Pas de champ 'nombre d'invités' ni de choix de prestations sur ce formulaire."
+}

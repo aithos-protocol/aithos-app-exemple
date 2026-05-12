@@ -1,0 +1,83 @@
+{
+  "site": "Les Ateliers du Bois",
+  "url": "https://www.les-ateliers-du-bois.fr",
+  "form_url": "https://www.les-ateliers-du-bois.fr/artisan-cuisiniste-91/#devis",
+  "fields": [
+    {
+      "name": "type_projet",
+      "label": "Vous souhaitez un / une",
+      "type": "radio",
+      "required": false,
+      "options": [
+        "Dressing",
+        "Cuisine",
+        "Meuble d'entrée",
+        "Meuble sous escalier",
+        "Meuble TV",
+        "Bibliothèque / Etagère",
+        "Aménagement de garage",
+        "Aménagement pour bureau",
+        "Un autre projet"
+      ]
+    },
+    {
+      "name": "prenom",
+      "label": "Votre prénom",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "nom",
+      "label": "Votre nom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "email",
+      "label": "Adresse e-mail",
+      "type": "email",
+      "required": true
+    },
+    {
+      "name": "telephone",
+      "label": "Téléphone",
+      "type": "tel",
+      "required": true,
+      "help": "Indispensable pour convenir d'un RDV"
+    },
+    {
+      "name": "code_postal",
+      "label": "Code postal",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "ville",
+      "label": "Ville",
+      "type": "text",
+      "required": true,
+      "help": "La ville où se déroulera vos travaux"
+    },
+    {
+      "name": "projet",
+      "label": "Votre projet",
+      "type": "textarea",
+      "required": false
+    },
+    {
+      "name": "documents",
+      "label": "Ajouter des documents (Plan, photos, etc.)",
+      "type": "file",
+      "required": false,
+      "help": "Formats acceptés : jpg, jpeg, png, gif, pdf — 3 Mo max",
+      "multiple": true
+    },
+    {
+      "name": "honeypot",
+      "label": "This field should be left blank",
+      "type": "honeypot",
+      "required": false
+    }
+  ],
+  "notes": "Formulaire WordPress / Elementor. Mention 'Karine vous contactera pour échanger sur votre projet et vous proposer un RDV'. Acceptation RGPD implicite via la mention sous le bouton d'envoi."
+}

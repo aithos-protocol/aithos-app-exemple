@@ -1,0 +1,103 @@
+{
+  "site": "Squirrel Mariage Film",
+  "url": "https://squirrelfilm.fr",
+  "form_url": "https://squirrelfilm.fr/contact/",
+  "fields": [
+    {
+      "name": "prenom",
+      "label": "Nom",
+      "type": "text",
+      "required": true,
+      "help": "Sous-champ 'Prénom' du composant Nom."
+    },
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true,
+      "help": "Sous-champ 'Nom' du composant Nom."
+    },
+    {
+      "name": "email",
+      "label": "E-mail",
+      "type": "email",
+      "required": true,
+      "help": "Sous-champ 'E-mail' (champ principal)."
+    },
+    {
+      "name": "email_confirmation",
+      "label": "Confirmez l'e-mail",
+      "type": "email",
+      "required": true,
+      "help": "Sous-champ de confirmation d'e-mail."
+    },
+    {
+      "name": "selection_nom_preparatifs",
+      "label": "Selection Nom préparatifs",
+      "type": "text",
+      "required": false,
+      "help": "Libellé verbatim ambigu — vraisemblablement un champ texte pour préciser le nom du lieu/personne des préparatifs."
+    },
+    {
+      "name": "telephone",
+      "label": "Téléphone",
+      "type": "tel",
+      "required": true
+    },
+    {
+      "name": "date_mariage",
+      "label": "Date du mariage",
+      "type": "date",
+      "required": true
+    },
+    {
+      "name": "lieu_preparatifs",
+      "label": "Lieu des préparatifs",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "lieu_reception",
+      "label": "Lieu de réception",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "nombre_invites",
+      "label": "Nombre d'invités",
+      "type": "number",
+      "required": false,
+      "help": "Affiché comme un slider/compteur ('Nombre d'invité : 0')."
+    },
+    {
+      "name": "forfait",
+      "label": "Selection du forfaits",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Cérémonie",
+        "Demi-journée",
+        "Classique",
+        "Week end",
+        "Sur-mesure (précisez)"
+      ],
+      "help": "Sélecteur de forfait. Ne liste pas explicitement le forfait 'Photo + Vidéo' (4800€) de la grille tarifaire — il tomberait sous 'Sur-mesure'. Les prix ne sont pas affichés à côté des options."
+    },
+    {
+      "name": "message",
+      "label": "Message",
+      "type": "textarea",
+      "required": true
+    },
+    {
+      "name": "accord_rgpd",
+      "label": "Accord RGPD",
+      "type": "checkbox",
+      "required": true,
+      "options": [
+        "Je consens à ce que ce site stocke mes informations envoyées afin qu'ils puissent répondre à ma requête."
+      ]
+    }
+  ],
+  "notes": "Formulaire WPForms (plugin WordPress wpforms-lite) sur https://squirrelfilm.fr/contact/. 13 champs au total (en comptant prénom/nom comme deux champs distincts et l'accord RGPD). Le formulaire expose partiellement la matrice des forfaits : 5 forfaits sont listés comme radios mais sans prix, et le forfait 'Photo + Vidéo' (4800€) de la page tarifs n'apparaît pas explicitement (probablement absorbé par l'option 'Sur-mesure (précisez)'). Aucune mention des 13 options à-la-carte (Soirée, Drone, Interview invités, Étalonnage, Heure sup matin/nuit, Teaser Instagram, Séance couple, Cérémonie complète, EVG/EVJF, Second cadreur, Livre d'or audio) — celles-ci doivent être discutées via le champ Message libre. Le libellé 'Selection Nom préparatifs' est ambigu et apparaît tel quel dans le rendu HTML."
+}

@@ -1,0 +1,112 @@
+{
+  "site": "Akena Vérandas",
+  "url": "https://www.akena.com",
+  "form_url": "https://www.akena.com/demande-de-devis",
+  "fields": [
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "prenom",
+      "label": "Prénom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "required": true
+    },
+    {
+      "name": "telephone",
+      "label": "Téléphone",
+      "type": "tel",
+      "required": true
+    },
+    {
+      "name": "adresse",
+      "label": "Adresse",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "code_postal",
+      "label": "Code postal",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "ville",
+      "label": "Ville",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "pays",
+      "label": "Pays",
+      "type": "select",
+      "required": true,
+      "options": [
+        "Allemagne",
+        "Belgique",
+        "Espagne",
+        "France",
+        "Italie",
+        "Luxembourg",
+        "Pays-Bas",
+        "Portugal",
+        "Royaume-Uni",
+        "Suisse"
+      ]
+    },
+    {
+      "name": "produit",
+      "label": "Quel produit vous intéresse ?",
+      "type": "select",
+      "required": true,
+      "options": [
+        "Véranda",
+        "Extension de maison",
+        "Pergola - Préau",
+        "Carport",
+        "Carport solaire",
+        "Poolhouse",
+        "Abri piscine",
+        "Véranda Piscine",
+        "Sas d'entrée",
+        "Stores de véranda",
+        "Stores de pergolas",
+        "Panneaux solaires"
+      ]
+    },
+    {
+      "name": "message",
+      "label": "Message",
+      "type": "textarea",
+      "required": false
+    },
+    {
+      "name": "marketing",
+      "label": "J'autorise le groupe AKENA à m'envoyer des actualités et des offres promotionnelles",
+      "type": "checkbox",
+      "required": false
+    },
+    {
+      "name": "rgpd",
+      "label": "J'accepte que mes données soient collectées par Akena pour le traitement de ma demande",
+      "type": "checkbox",
+      "required": true
+    },
+    {
+      "name": "honeypot_idproduit",
+      "label": "idProduit - do not use",
+      "type": "honeypot",
+      "required": false
+    }
+  ],
+  "notes": "Formulaire Drupal sobre. Après envoi, une hôtesse commerciale rappelle sous 48h pour planifier un RDV à domicile avec un technicien-conseil. Le sur-mesure technique (dimensions, options) se fait via un Configurateur 3D séparé hébergé sur lead.batitrade.com/akena/ et lors de la visite à domicile. Présence du label 'La French Fab' et 'Fabriqué en France'."
+}

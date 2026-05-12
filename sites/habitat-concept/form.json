@@ -1,0 +1,102 @@
+{
+  "site": "Habitat Concept",
+  "url": "https://www.habitatconcept.fr",
+  "form_url": "https://www.habitatconcept.fr/devis",
+  "fields": [
+    {
+      "name": "type_maison",
+      "label": "Type de maison",
+      "type": "radio",
+      "required": true,
+      "options": [
+        "Plain-pied",
+        "Hors d'eau hors d'air",
+        "Combles aménagés",
+        "Combles aménageables"
+      ]
+    },
+    {
+      "name": "garage",
+      "label": "Garage",
+      "type": "radio",
+      "required": false,
+      "options": ["Non", "Oui"]
+    },
+    {
+      "name": "nom",
+      "label": "Nom",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "agence",
+      "label": "Choix de l'agence",
+      "type": "select",
+      "required": true,
+      "options": [
+        "ARRAS 62",
+        "BARENTIN 76",
+        "BAYEUX 14",
+        "BETHUNE 62",
+        "BOOS 76",
+        "BOULOGNE SUR MER 62",
+        "BOURG-ACHARD 27",
+        "CAEN 14",
+        "CAMBRAI 59",
+        "DIEPPE 76",
+        "DOUAI 59",
+        "EVREUX 27",
+        "HONFLEUR 14",
+        "LE TOUQUET 62",
+        "LENS 62",
+        "LILLE 59",
+        "NEUFCHATEL EN BRAY 76",
+        "POULAINVILLE 80",
+        "Rennes 35",
+        "SAINT OMER 62",
+        "SAINT-LO 50",
+        "SAINT-ROMAIN-DE-COLBOSC 76",
+        "VALENCIENNES 59",
+        "YVETOT 76"
+      ]
+    },
+    {
+      "name": "telephone",
+      "label": "Téléphone",
+      "type": "tel",
+      "required": true
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "required": true
+    },
+    {
+      "name": "demande",
+      "label": "Demande",
+      "type": "textarea",
+      "required": false
+    },
+    {
+      "name": "visio",
+      "label": "Je souhaite être contacté en visio-conférence",
+      "type": "checkbox",
+      "required": false
+    },
+    {
+      "name": "rgpd",
+      "label": "J'accepte que les informations saisies soient exploitées dans le cadre de la demande et de la relation commerciale pouvant en découler",
+      "type": "checkbox",
+      "required": true
+    },
+    {
+      "name": "marketing_bdl",
+      "label": "Recevoir les offres du Groupe BDL et de ses filiales",
+      "type": "radio",
+      "required": false,
+      "options": ["Oui", "Non"]
+    }
+  ],
+  "notes": "La page mentionne explicitement que sont également qualifiés en aval (par appel) : nombre de pièces, surface totale, enveloppe budgétaire. reCAPTCHA présent. L'agence est assignée en fonction du département choisi — toutes les agences sont dans la moitié nord de la France."
+}
