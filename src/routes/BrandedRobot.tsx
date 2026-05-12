@@ -50,6 +50,7 @@ import {
 } from "../lib/brand-agent.js";
 import type { HexColor } from "../lib/brand-types.js";
 import {
+  FRAMING_GUIDE,
   designRobotFromDescription,
   type DesignProposal,
 } from "../lib/design-agent.js";
@@ -578,6 +579,29 @@ export function BrandedRobot() {
           <span>{description.length} chars</span>
           <span>min ~10 chars to enable Sonnet</span>
         </div>
+
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: "pointer", fontSize: "0.85em" }}>
+            View the static framing brief (passed to the design agent
+            alongside your description)
+          </summary>
+          <p style={{ fontSize: "0.75em", color: "#666", margin: "6px 0" }}>
+            This is the bust convention every design must respect — read
+            by the design agent in its system prompt before it writes the
+            visualBrief. Identical for every brand to keep the mascot
+            library visually consistent.
+          </p>
+          <pre style={{
+            background: "#f7f7f7",
+            padding: 8,
+            borderRadius: 4,
+            fontSize: "0.75em",
+            whiteSpace: "pre-wrap",
+            marginTop: 0,
+          }}>
+            {FRAMING_GUIDE}
+          </pre>
+        </details>
 
         <div className="row" style={{ gap: 8, marginTop: 8 }}>
           <button
