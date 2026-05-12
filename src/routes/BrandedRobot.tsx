@@ -45,9 +45,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   COMPOSITION_TEMPLATE,
   step1GenerateRobot,
+  step1_5PrepareRobotBg,
   step3PrepareLogo,
   step4Composite,
   type Step1Result,
+  type Step1_5Result,
   type Step3LogoResult,
   type Step4CompositeResult,
   type Step4Settings,
@@ -209,6 +211,12 @@ export function BrandedRobot() {
   const [seedNonce, setSeedNonce] = useState(0);
   const [step1Error, setStep1Error] = useState<string | null>(null);
 
+  // --- Step 1.5 (prepare robot bg → transparent) state ---
+  const [step1_5Running, setStep1_5Running] = useState(false);
+  const [step1_5Result, setStep1_5Result] = useState<Step1_5Result | null>(null);
+  const [step1_5Tolerance, setStep1_5Tolerance] = useState(38);
+  const [step1_5Error, setStep1_5Error] = useState<string | null>(null);
+
   // --- Step 2 (vision) state ---
   const [step2Running, setStep2Running] = useState(false);
   const [vision, setVision] = useState<VisionTorsoResult | null>(null);
@@ -258,6 +266,8 @@ export function BrandedRobot() {
 
   // Reset downstream when the robot image (or logo) changes.
   useEffect(() => {
+    setStep1_5Result(null);
+    setStep1_5Error(null);
     setVision(null);
     setDebugOverlay(null);
     setStep2Error(null);
@@ -309,6 +319,11 @@ export function BrandedRobot() {
             },
             logo: treatedLogo,
             settings,
+            // v14 — if Step 1.5 ran, composite onto the transparent-bg
+            // canvas; otherwise fall back to the raw (legacy v13 path).
+            ...(step1_5Result
+              ? { robotCanvasOverride: step1_5Result.processedCanvas }
+              : {}),
           });
           setStep4Result(r);
         } catch (e) {
@@ -316,13 +331,13 @@ export function BrandedRobot() {
         }
       })();
     }, 80);
-  }, [generated, vision, treatedLogo, settings, debugOverlay]);
+  }, [generated, vision, treatedLogo, settings, debugOverlay, step1_5Result]);
 
   const isAuthenticated = state.canSignAsOwner || state.delegates.length > 0;
   if (!isAuthenticated) {
     return (
       <section>
-        <h2>Branded robot — v13</h2>
+        <h2>Branded robot — v14</h2>
         <p className="lede">
           Sign in as an owner first so the agent can spend your wallet on
           the Sonnet + image-generation calls.
@@ -420,6 +435,23 @@ export function BrandedRobot() {
       setStep1Error(formatError(e));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const runStep1_5 = async () => {
+    if (!generated) return;
+    setStep1_5Running(true);
+    setStep1_5Error(null);
+    try {
+      const r = await step1_5PrepareRobotBg({
+        rawCanvas: generated.rawCanvas,
+        tolerance: step1_5Tolerance,
+      });
+      setStep1_5Result(r);
+    } catch (e) {
+      setStep1_5Error(formatError(e));
+    } finally {
+      setStep1_5Running(false);
     }
   };
 
@@ -575,7 +607,7 @@ export function BrandedRobot() {
 
   return (
     <section>
-      <h2>Branded robot — v13 (description-driven, judged composite)</h2>
+      <h2>Branded robot — v14 (description-driven, judged composite, transparent bg)</h2>
       <p className="lede">
         Describe the brand → Sonnet proposes a visualBrief + palette →
         upload a logo → generate the robot → Sonnet locates the chest →
@@ -940,6 +972,108 @@ export function BrandedRobot() {
         )}
       </section>
 
+      {/* ===================== Step 1.5 — Prepare robot bg (transparent) ===================== */}
+      <section style={stepStyle}>
+        <h3>Step 1.5 — Prepare robot background (make transparent)</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          v14 — image models drift on the requested bg colour, so instead
+          of trying to match it pixel-perfect on the page, we flood-fill
+          the (uniform, halo-free) bg to <code>alpha=0</code>. The
+          downstream composite then sits cleanly on any page colour.
+          Mirrors Step 3 for logos.
+        </p>
+
+        <label style={{ display: "block", maxWidth: 360, marginBottom: 10 }}>
+          <span style={{ fontSize: "0.85em" }}>
+            Flood-fill tolerance — {step1_5Tolerance}
+          </span>
+          <input
+            type="range" min={0} max={100} step={1}
+            value={step1_5Tolerance}
+            onChange={(e) => setStep1_5Tolerance(Number(e.target.value))}
+            disabled={step1_5Running}
+            style={{ width: "100%" }}
+          />
+          <span style={{ fontSize: "0.75em", color: "#888" }}>
+            Low = preserves contour detail (risk of leaving a coloured
+            halo). High = aggressive (risk of eating soft body shadows).
+            38 = legacy Step 2 internal value, good default.
+          </span>
+        </label>
+
+        <button
+          type="button"
+          onClick={() => void runStep1_5()}
+          disabled={!generated || step1_5Running}
+        >
+          {step1_5Running
+            ? "Processing…"
+            : step1_5Result
+              ? "Re-process"
+              : "Remove background"}
+        </button>
+        {!generated && (
+          <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
+            Run Step 1 first.
+          </em>
+        )}
+        {step1_5Error && (
+          <div className="error" style={{ marginTop: 8 }}>{step1_5Error}</div>
+        )}
+
+        {step1_5Result && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+              <figure style={{ margin: 0 }}>
+                <figcaption style={figcapStyle}>Raw (Step 1 output)</figcaption>
+                <img
+                  src={generated?.rawDataUri ?? ""}
+                  alt="raw robot"
+                  style={{ ...imgStyle, borderRadius: 4 }}
+                />
+              </figure>
+              <figure style={{ margin: 0 }}>
+                <figcaption style={figcapStyle}>
+                  Transparent bg (removed{" "}
+                  <code>{step1_5Result.detectedCornerHex}</code>)
+                </figcaption>
+                <img
+                  src={step1_5Result.processedDataUri}
+                  alt="robot with transparent bg"
+                  style={{ ...imgStyle, ...checkerBgStyle }}
+                />
+              </figure>
+            </div>
+            <dl className="kvtable" style={{ marginTop: 8, fontSize: "0.85em" }}>
+              <dt>Detected corner colour</dt>
+              <dd>
+                <span style={{
+                  display: "inline-block",
+                  width: 14, height: 14,
+                  background: step1_5Result.detectedCornerHex,
+                  border: "1px solid #888",
+                  verticalAlign: "middle",
+                  marginRight: 4,
+                }} />
+                <code>{step1_5Result.detectedCornerHex}</code>
+              </dd>
+              <dt>Tolerance applied</dt>
+              <dd>{step1_5Result.tolerance}</dd>
+              <dt>Used downstream</dt>
+              <dd>
+                Step 4 will composite onto this transparent canvas
+                instead of the raw one.
+              </dd>
+            </dl>
+            <div className="row" style={{ gap: 8, marginTop: 8 }}>
+              <a href={step1_5Result.processedDataUri} download="robot-transparent.png">
+                Download transparent PNG
+              </a>
+            </div>
+          </>
+        )}
+      </section>
+
       {/* ===================== Step 2 — Vision ===================== */}
       <section style={stepStyle}>
         <h3>Step 2 — Locate chest (Sonnet vision)</h3>
@@ -1243,9 +1377,12 @@ export function BrandedRobot() {
             const useComposite =
               step4Result !== null &&
               (judgment === null || judgment.verdict === "harmonious");
-            const finalUri = useComposite
-              ? step4Result?.dataUri
+            // v14 — when shipping the bare robot, prefer the
+            // transparent-bg version if Step 1.5 ran.
+            const bareUri = step1_5Result
+              ? step1_5Result.processedDataUri
               : generated.rawDataUri;
+            const finalUri = useComposite ? step4Result?.dataUri : bareUri;
             const filename = useComposite ? "mascot-with-logo.png" : "mascot-bare.png";
             return finalUri ? (
               <div style={{ marginTop: 12, maxWidth: 520 }}>

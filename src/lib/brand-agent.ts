@@ -151,7 +151,17 @@ export const COMPOSITION_TEMPLATE = [
   "EMPTY SPACE reserved for a logo that will be added in a subsequent step.",
   "",
   "BACKGROUND:",
-  "- A flat solid color (specified in the brand brief) with a SUBTLE radial halo glow behind the head, color slightly complementary to the background (warmer if bg is dark, slightly darker if bg is light) suggesting depth.",
+  "- A SINGLE FLAT SOLID COLOR (specified in the brand brief) filling the",
+  "  entire frame, strictly uniform edge-to-edge.",
+  "- ZERO halo, ZERO aura, ZERO radial glow, ZERO gradient, ZERO vignette,",
+  "  ZERO atmospheric depth, ZERO texture, ZERO noise behind the robot.",
+  "- The background pixels must all be EXACTLY THE SAME COLOR — no colour",
+  "  drift, no subtle shading, no lighting falloff, no soft edge fade.",
+  "  Imagine the robot stamped onto a perfectly flat coloured paper sheet.",
+  "- Rationale (do not include in the image, just for the model's behaviour):",
+  "  the background is flood-filled to alpha=0 in a post-processing step",
+  "  so the robot can be placed on any page colour. Any halo, gradient or",
+  "  glow would prevent that step from working cleanly.",
   "",
   "STYLE:",
   "- Clean modern flat 2D illustration with subtle cel shading.",
@@ -266,6 +276,60 @@ export async function step1GenerateRobot(args: Step1Args): Promise<Step1Result> 
     rawCanvas,
     creditsSpent: r.creditsCharged,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Step 1.5 — Prepare robot bg (flood-fill the uniform bg to alpha=0)        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Mirror of `step3PrepareLogo` but for the robot itself.
+ *
+ * Image models don't reliably output an exact target hex for the
+ * background — they drift toward more saturated / off-pitch colours
+ * (we routinely see #e0e7f1 when asking for #f6f9fc). The v13
+ * approach was to design a halo behind the head so the off-colour
+ * background was visually intentional. v14 drops the halo (see
+ * COMPOSITION_TEMPLATE) and instead flood-fills the uniform bg to
+ * alpha=0, so the robot composites cleanly onto any page colour.
+ *
+ * Samples the average corner colour and flood-fills with the same
+ * tolerance the legacy Step 2 internal silhouette extraction uses.
+ * The tolerance is exposed so the operator can dial it up (more
+ * aggressive — useful when the bg drifts into the body's shadow
+ * range) or down (preserves more contour detail).
+ */
+export interface Step1_5Args {
+  readonly rawCanvas: HTMLCanvasElement;
+  /** Flood-fill tolerance in RGB distance. Default 38 (legacy Step 2 value). */
+  readonly tolerance?: number;
+}
+
+export interface Step1_5Result {
+  /** New canvas — same dimensions as input, with the bg flood-filled to alpha=0. */
+  readonly processedCanvas: HTMLCanvasElement;
+  readonly processedDataUri: string;
+  /** Average corner colour used as the flood-fill reference (for trace). */
+  readonly detectedCornerHex: string;
+  /** Tolerance actually applied (so the UI can display it). */
+  readonly tolerance: number;
+}
+
+export async function step1_5PrepareRobotBg(
+  args: Step1_5Args,
+): Promise<Step1_5Result> {
+  const { rawCanvas } = args;
+  const tolerance = args.tolerance ?? 38;
+  const processedCanvas = document.createElement("canvas");
+  processedCanvas.width = rawCanvas.width;
+  processedCanvas.height = rawCanvas.height;
+  const ctx = processedCanvas.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+  ctx.drawImage(rawCanvas, 0, 0);
+  const detectedCornerHex = sampleCornerColor(processedCanvas);
+  removeSolidBackground(processedCanvas, detectedCornerHex, tolerance);
+  const processedDataUri = canvasToDataUri(processedCanvas);
+  return { processedCanvas, processedDataUri, detectedCornerHex, tolerance };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -570,6 +634,14 @@ export interface Step4CompositeArgs {
    */
   readonly logo: { readonly processedImg: HTMLImageElement };
   readonly settings: Step4Settings;
+  /**
+   * v14 — when Step 1.5 has run, the operator can pass its
+   * transparent-bg canvas here so the final composite no longer
+   * carries the original solid background. When omitted, falls back
+   * to `robot.rawCanvas` (legacy v13 behaviour with the coloured bg
+   * + halo intact).
+   */
+  readonly robotCanvasOverride?: HTMLCanvasElement;
 }
 
 export interface Step4CompositeResult {
@@ -596,10 +668,13 @@ export async function step4Composite(
     ...(settings.shadowBlur !== undefined ? { shadowBlur: settings.shadowBlur } : {}),
     ...(settings.shadowColor !== undefined ? { shadowColor: settings.shadowColor } : {}),
   };
-  // Composite onto the RAW canvas (bg intact) so the final image
-  // keeps the colored background + halo.
+  // v14 — composite onto the transparent-bg canvas if Step 1.5 ran;
+  // otherwise fall back to the raw canvas (legacy v13 behaviour: keeps
+  // the coloured background + halo). The override lets the operator
+  // ship a robot that floats on any page colour without bg matching.
+  const baseCanvas = args.robotCanvasOverride ?? robot.rawCanvas;
   const canvas = compositeLogoOnRobot(
-    robot.rawCanvas,
+    baseCanvas,
     logo.processedImg,
     torso,
     compositeOpts,
