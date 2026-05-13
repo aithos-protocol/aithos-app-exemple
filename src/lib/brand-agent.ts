@@ -92,15 +92,26 @@ export const COMPOSITION_TEMPLATE = [
   "- Square 1:1 frame.",
   "- The robot is shown as a COMPLETE BUST: head + neck + shoulders + the",
   "  ENTIRE upper-body torso are ALL VISIBLE inside the frame.",
-  "- The BUST IS COMPLETE — its LOWER TERMINATION (sculpted base, flat cut,",
-  "  tapered terminal, polished stand — exact shape comes from the brand",
-  "  brief) is FULLY VISIBLE inside the frame. The bust is NEVER cut off by",
-  "  the bottom edge of the image; you can clearly see where the bust ends.",
+  "- The BUST IS COMPLETE — its LOWER TERMINATION is a CLEAN, NATURAL CUT",
+  "  at the lower ribs / upper abdomen, like a half-body avatar floating in",
+  "  empty space. The bust is FULLY VISIBLE inside the frame, with empty",
+  "  background clearly visible BELOW it; you can see where the body ends",
+  "  and there is nothing beneath it.",
+  "- The bust is NEVER cut off by the bottom edge of the image: the body's",
+  "  lower boundary is INSIDE the frame and surrounded by background pixels.",
+  "- ZERO sculpted base, ZERO pedestal, ZERO stand, ZERO socle, ZERO",
+  "  platform, ZERO polished terminal, ZERO ornamental cap, ZERO mount,",
+  "  ZERO support of any kind beneath the bust. The bust simply ends and",
+  "  the background takes over — nothing rests under the body.",
+  "- ZERO pointed wedge, ZERO triangular tapering, ZERO V-shape narrowing",
+  "  to a point. The lower boundary is a clean, natural, roughly horizontal",
+  "  termination — soft and slightly curved is fine, sharply pointed is NOT.",
   "- The bust is DETACHED from any lower body: NO waist, NO hips, NO legs,",
   "  NO abdomen extending below the bust. The bust is the lowest part of the",
-  "  body shown in the image. Think Greek sculpture bust, action-figure torso,",
-  "  half-body avatar — NOT a torso flowing into a hidden lower body cropped",
-  "  by the frame.",
+  "  body shown in the image. Think Greek sculpture bust freed from its",
+  "  pedestal, half-body avatar floating in empty space — NOT a torso",
+  "  flowing into a hidden lower body cropped by the frame, and NOT a bust",
+  "  resting on a sculpted base.",
   "- ARMS follow ONE of these two options (the brand brief specifies which):",
   "  * 'arms-in-action': both arms FULLY VISIBLE inside the frame, performing",
   "    a small contained action — holding a tool, presenting an object, etc.",
@@ -108,8 +119,23 @@ export const COMPOSITION_TEMPLATE = [
   "  * 'arms-cut': arms cut at the FOREARM — upper arms and elbows visible,",
   "    lower forearms and hands exit the frame cleanly at the bottom-left",
   "    and bottom-right edges.",
-  "- The robot faces the viewer DIRECTLY — no 3/4 turn, no tilted head,",
-  "  perfectly symmetric.",
+  "- ABSOLUTE FRONT VIEW — the robot is shown in STRICT FRONTAL ORTHOGRAPHIC",
+  "  PROJECTION, like a passport photo or an architect's elevation drawing.",
+  "  The camera is aligned ON the body's central vertical axis at chest",
+  "  height; the optical axis passes EXACTLY through the centre of the chest.",
+  "- The robot's body, head and eyes ALL face the viewer DIRECTLY and",
+  "  IDENTICALLY. Both eyes are equally visible and at the SAME size.",
+  "  Both shoulders are equally visible, equally tall, equally wide.",
+  "  Both sides of the chest are equally lit and equally exposed.",
+  "- ZERO three-quarter view, ZERO 3/4 turn, ZERO profile, ZERO contrapposto,",
+  "  ZERO twist of the spine, ZERO chest rotation, ZERO head tilt, ZERO head",
+  "  rotation, ZERO chin lift or drop, ZERO dynamic camera angle.",
+  "- The silhouette is BILATERALLY SYMMETRIC about the central vertical axis:",
+  "  if you mirror-flipped the image left-to-right, the result would look",
+  "  almost identical (apart from any held object). The left half and the",
+  "  right half of the body are MIRROR IMAGES of each other.",
+  "- The shoulder line is HORIZONTAL — strictly parallel to the bottom edge",
+  "  of the frame. The eye line is also horizontal.",
   "- Comfortable horizontal margin: 10-15% empty background visible on EACH",
   "  SIDE beyond the outer body edges. The robot occupies APPROXIMATELY",
   "  70-80% of the frame width.",
@@ -401,8 +427,19 @@ export async function step2DetectTorso(
   //   4. Bbox-65% (last resort)
   const torsoColor = pickTorsoColor(brand);
   const bbox = detectSilhouetteBox(silhouetteCanvas);
-  const chestYMin = bbox.top + Math.floor(bbox.height * 0.45);
-  const chestYMax = bbox.top + Math.floor(bbox.height * 0.95);
+  // Chest band — validation window for ALL detection strategies. Anything
+  // landing OUTSIDE this band is rejected and the next fallback runs.
+  //
+  // We aim for the PLEXUS / UPPER-CHEST area, NOT the mid-torso. On a
+  // bust crop the silhouette bbox spans head-to-bust-bottom; the plexus
+  // sits at roughly 30-50% down that bbox (head ≈ 0-25%, neck ≈ 25-30%,
+  // upper chest / plexus ≈ 30-55%, lower chest / abdomen ≈ 55-100%).
+  //
+  // Earlier values [0.45, 0.95] let the cascade place the logo in the
+  // lower abdomen — visually too low for a brand emblem. Tightening to
+  // [0.30, 0.60] forces every strategy to target the plexus region.
+  const chestYMin = bbox.top + Math.floor(bbox.height * 0.30);
+  const chestYMax = bbox.top + Math.floor(bbox.height * 0.60);
   const isInChestBand = (cy: number): boolean => cy >= chestYMin && cy <= chestYMax;
 
   console.log("[brand-agent] bg removal + detection start:", {
@@ -446,7 +483,13 @@ export async function step2DetectTorso(
     };
     const seg = await computeNs.invokeSegmentation({
       image: blob,
-      textInput: "the torso and chest of the robot character",
+      // Target the upper chest / sternum area specifically. Asking for
+      // "the torso" returned a polygon that spans armpit-to-navel, whose
+      // bbox center lands on the abdomen — too low for a brand emblem.
+      // The phrasing below biases Florence toward the upper half of the
+      // torso (where a logo would actually be printed on a t-shirt).
+      textInput:
+        "the upper chest of the robot character — the area centred on the sternum and solar plexus, just below the collarbone and well above the navel, where a brand emblem would be printed on a t-shirt",
     });
     console.log(
       `[brand-agent] Florence-2 returned ${seg.polygons.length} polygon(s) in ${(performance.now() - t0).toFixed(0)}ms`,
@@ -454,13 +497,25 @@ export async function step2DetectTorso(
     if (seg.polygons.length > 0 && seg.bbox) {
       florencePolygon = seg.polygons[0]!.points;
       const cx = Math.round((seg.bbox.left + seg.bbox.right) / 2);
-      const cy = Math.round((seg.bbox.top + seg.bbox.bottom) / 2);
+      // Vertical bias — even with the upper-chest prompt, Florence
+      // tends to return a polygon that includes the lower torso. Taking
+      // the midpoint puts the logo on the abdomen. Biasing to the
+      // upper third (~35% down from the polygon top) targets the plexus
+      // region, which is what brand emblems actually look like on a
+      // mascot's chest.
+      const polyTop = seg.bbox.top;
+      const polyBottom = seg.bbox.bottom;
+      const cy = Math.round(polyTop + (polyBottom - polyTop) * 0.35);
       const w = seg.bbox.right - seg.bbox.left;
       const h = seg.bbox.bottom - seg.bbox.top;
       const diameter = Math.round(Math.min(w, h) * 0.5);
       torso = { centerX: cx, centerY: cy, diameter };
       torsoSource = "florence-2";
-      console.log("[brand-agent] ✅ using florence-2", { torso, bbox: seg.bbox });
+      console.log("[brand-agent] ✅ using florence-2", {
+        torso,
+        bbox: seg.bbox,
+        cyBias: "polyTop + 0.35 × polyHeight (plexus-targeted)",
+      });
       // Skip remaining cascade — Florence-2 is reliable.
       // florencePolygon is guaranteed non-null here (we just set it).
       const debugOverlay = renderTorsoDebugOverlay(rawCanvas, bbox, torso, {
@@ -530,12 +585,15 @@ export async function step2DetectTorso(
         console.log("[brand-agent] ⚠ using silhouette-width fallback", torso);
       } else {
         torso = {
+          // Plexus heuristic: ~42% down the bbox lands on the upper
+          // chest of a typical bust crop. Bumped up from 0.65 (which
+          // was hitting the abdomen / lower torso).
           centerX: Math.round(bbox.left + bbox.width / 2),
-          centerY: Math.round(bbox.top + bbox.height * 0.65),
+          centerY: Math.round(bbox.top + bbox.height * 0.42),
           diameter: Math.round(bbox.width * 0.38),
         };
         torsoSource = "bbox-heuristic";
-        console.log("[brand-agent] ⚠⚠ using bbox-65% LAST RESORT", torso);
+        console.log("[brand-agent] ⚠⚠ using bbox-42% LAST RESORT", torso);
       }
     }
   }

@@ -168,25 +168,38 @@ export async function detectTorsoByPose(
   const shoulderMidY = (ls.y + rs.y) / 2;
   const shoulderWidth = Math.hypot(ls.x - rs.x, ls.y - rs.y);
 
+  // Target = the PLEXUS / upper chest, not the geometric mid-torso.
+  // For a brand emblem we want the disc to sit right under the
+  // pectoral line, where a t-shirt logo would be printed. That's
+  // roughly 30-35% of the way down from the shoulder line toward the
+  // hips (i.e. close to the shoulders, NOT halfway to the hips).
+  const SHOULDER_TO_PLEXUS_RATIO = 0.30;
   const hipsVisible = lh.visibility > 0.5 && rh.visibility > 0.5;
   let torsoCenterX: number;
   let torsoCenterY: number;
   if (hipsVisible) {
     const hipMidX = (lh.x + rh.x) / 2;
     const hipMidY = (lh.y + rh.y) / 2;
-    torsoCenterX = (shoulderMidX + hipMidX) / 2;
-    torsoCenterY = (shoulderMidY + hipMidY) / 2;
+    // Mostly-shoulder-weighted blend instead of the symmetric midpoint
+    // — earlier code used (shoulders+hips)/2 which sat on the navel.
+    torsoCenterX =
+      shoulderMidX * (1 - SHOULDER_TO_PLEXUS_RATIO) + hipMidX * SHOULDER_TO_PLEXUS_RATIO;
+    torsoCenterY =
+      shoulderMidY * (1 - SHOULDER_TO_PLEXUS_RATIO) + hipMidY * SHOULDER_TO_PLEXUS_RATIO;
     console.log(
-      `[pose] hips visible → centroid of shoulders+hips: (${torsoCenterX.toFixed(0)}, ${torsoCenterY.toFixed(0)})`,
+      `[pose] hips visible → shoulder-biased blend (${(1 - SHOULDER_TO_PLEXUS_RATIO).toFixed(2)}×shoulders + ${SHOULDER_TO_PLEXUS_RATIO.toFixed(2)}×hips): ` +
+        `(${torsoCenterX.toFixed(0)}, ${torsoCenterY.toFixed(0)})`,
     );
   } else {
+    // Anatomical estimation when hips are cropped out.
+    // Ratio dropped from 0.6 (mid-torso) to ~0.3 (plexus level).
     torsoCenterX = shoulderMidX;
-    torsoCenterY = shoulderMidY + shoulderWidth * 0.6;
+    torsoCenterY = shoulderMidY + shoulderWidth * SHOULDER_TO_PLEXUS_RATIO;
     console.log(
-      `[pose] hips cropped/invisible → shoulder midpoint + 0.6×shoulderWidth: ` +
+      `[pose] hips cropped/invisible → shoulder midpoint + ${SHOULDER_TO_PLEXUS_RATIO}×shoulderWidth (plexus): ` +
         `shoulderMid=(${shoulderMidX.toFixed(0)},${shoulderMidY.toFixed(0)}), ` +
         `width=${shoulderWidth.toFixed(0)}, ` +
-        `anatomical offset=${(shoulderWidth * 0.6).toFixed(0)}, ` +
+        `anatomical offset=${(shoulderWidth * SHOULDER_TO_PLEXUS_RATIO).toFixed(0)}, ` +
         `final torsoY=${torsoCenterY.toFixed(0)}`,
     );
   }

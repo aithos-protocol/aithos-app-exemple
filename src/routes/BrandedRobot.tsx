@@ -1,47 +1,58 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// /branded-robot — v13 pipeline (description-driven + smart logo overlay).
+// /branded-robot — v15 pipeline (URL → 4 structured sections + agent + design).
 //
 // Front-end flow:
 //
 //   0. Analyse from URL (OPTIONAL): paste a URL, Sonnet fetches it via
 //                            Anthropic's web_fetch tool and produces a
-//                            brand description that lands in the
-//                            textarea of step 1.
-//   1. Describe the brand:   free-text textarea + 'Generate design'
-//                            → Sonnet 4.6 (text) proposes a robot
-//                              visualBrief + 3-colour palette as JSON.
-//   2. Design (editable):    visualBrief textarea + 3 colour pickers,
-//                            seeded by the Sonnet proposal, overridable.
-//   3. Logo upload:          PNG/SVG file input. Auto-detects whether
-//                            the logo has alpha; the operator can flip
-//                            the toggle to force flood-fill or skip it.
-//   4. Step 1 — Generate:    visualBrief + locked COMPOSITION_TEMPLATE
-//                            + palette → image model.
-//   5. Step 2 — Vision:      Sonnet 4.6 (vision) returns logo center,
-//                            diameter, and sampled chestColorHex.
-//   6. Step 3 — Prepare:     background removal on the uploaded logo.
-//   7. Step 3.5 — Treat:     Sonnet 4.6 (vision) sees the prepared
-//                            logo, receives chest + brand palette in
-//                            text, and decides recolor action + blend
-//                            mode + opacity in ONE call. The recolor
-//                            is applied immediately and the blend /
-//                            opacity overwrite Step 4 defaults.
-//   8. Step 4 — Composite:   treated logo onto the robot chest.
-//                            Sliders re-render live and let the
-//                            operator override the plan.
-//   9. Step 5 — Judge:       Sonnet 4.6 (vision) judges the composite
-//                            harmony. If 'skip_logo', the Final output
-//                            panel falls back to the bare robot.
+//                            structured analysis that fills:
+//                              - Business (paragraph)
+//                              - Formulaire (JSON of forms detected)
+//                              - UI (primary/secondary/bg colors,
+//                                button style, input style, visual brief)
+//                              - Logo (auto-fetched as data URI from
+//                                the absolute URL Sonnet returned)
 //
-// The locked COMPOSITION_TEMPLATE (in brand-agent.ts) has been
-// strengthened with positive phrasing + emphatic constraints to keep
-// diffusion models from drawing chest plates / seams / emblems that
-// would compete with the composited logo.
+//   1. Business:             paragraph describing the company. Used by
+//                            the Agent generator.
+//
+//   2. Formulaire:           JSON of detected forms. Editable. Used by
+//                            the Agent generator as the data contract.
+//
+//   3. UI (was "Describe     primary / secondary / background colours,
+//      the brand"):          button style, input style, brand visual
+//                            brief. Used by Step 1 (image generation).
+//
+//   4. Logo:                 PNG/SVG file upload. Auto-populated from
+//                            URL analysis when possible.
+//
+//   5. Generate Agent:       button → Sonnet 4.6 turns Business +
+//                            Formulaire into the system prompt of a
+//                            prospect-qualification agent. Editable
+//                            textarea for the result.
+//
+//   6. Step 1 — Generate:    UI.visualBrief + locked COMPOSITION_TEMPLATE
+//                            + UI palette → image model. The "static
+//                            robot prompt" (composition + framing) is
+//                            still owned by brand-agent.ts.
+//   7. Step 1.5 — Prepare:   flood-fill robot bg → transparent.
+//   8. Step 2 — Vision:      Sonnet 4.6 (vision) returns logo center,
+//                            diameter, and chest colour.
+//   9. Step 3 — Prepare logo:background removal on the uploaded logo.
+//  10. Step 3.5 — Treat:     Sonnet 4.6 (vision) decides recolor + blend
+//                            mode + opacity in ONE call.
+//  11. Step 4 — Composite:   treated logo onto the robot chest.
+//  12. Step 5 — Judge:       Sonnet 4.6 (vision) judges harmony or
+//                            falls back to bare robot.
 
 import { useEffect, useRef, useState } from "react";
 
+import {
+  generateAgentSystemPrompt,
+  type AgentPromptResult,
+} from "../lib/agent-prompt-generator.js";
 import {
   COMPOSITION_TEMPLATE,
   step1GenerateRobot,
@@ -55,13 +66,21 @@ import {
   type Step4Settings,
 } from "../lib/brand-agent.js";
 import type { HexColor } from "../lib/brand-types.js";
-import {
-  FRAMING_GUIDE,
-  designRobotFromDescription,
-  type DesignProposal,
-} from "../lib/design-agent.js";
+import { FRAMING_GUIDE } from "../lib/design-agent.js";
 import { canvasToBlob } from "../lib/image-pipeline.js";
-import { analyzeUrl, type UrlAnalysis } from "../lib/url-analyzer.js";
+import {
+  analyzeBusinessFromUrl,
+  analyzeFormulaireFromUrl,
+  analyzeUiFromUrl,
+  delay,
+  extractLogoFromUrl,
+  type BusinessAnalysis,
+  type FormulaireAnalysis,
+  type FormulaireSchema,
+  type LogoExtraction,
+  type RetryProgress,
+  type UiAnalysis,
+} from "../lib/url-analyzer.js";
 import {
   applyTreatmentToLogo,
   judgeCompositeHarmony,
@@ -103,6 +122,35 @@ interface UploadedLogo {
   readonly hasAlpha: boolean;
   readonly width: number;
   readonly height: number;
+}
+
+/** State of one of the 4 URL sub-step calls. */
+type UrlSubStepState<T> =
+  | { readonly status: "idle" }
+  | { readonly status: "running"; readonly retryInfo?: RetryProgress }
+  | { readonly status: "done"; readonly result: T }
+  | { readonly status: "error"; readonly error: string };
+
+interface SubStepWithMeta {
+  readonly creditsSpent: number;
+}
+
+function anyStepRunning(...steps: ReadonlyArray<UrlSubStepState<unknown>>): boolean {
+  return steps.some((s) => s.status === "running");
+}
+
+function anyStepDone(...steps: ReadonlyArray<UrlSubStepState<unknown>>): boolean {
+  return steps.some((s) => s.status === "done");
+}
+
+function totalCreditsSpent(
+  ...steps: ReadonlyArray<UrlSubStepState<SubStepWithMeta>>
+): number {
+  let total = 0;
+  for (const s of steps) {
+    if (s.status === "done") total += s.result.creditsSpent;
+  }
+  return total;
 }
 
 /** Build an ad-hoc BrandProfile from the editable UI state so the
@@ -164,45 +212,91 @@ async function detectAlphaInCorners(dataUri: string): Promise<{
   });
 }
 
-const DEFAULT_DESCRIPTION_PLACEHOLDER =
-  "Paste a paragraph describing the website / product / brand here.\n\n" +
+const DEFAULT_BUSINESS_PLACEHOLDER =
+  "Paste a paragraph describing the business / company / product here.\n\n" +
   "Example: 'Brewsmith is a specialty coffee subscription that sources " +
   "single-origin beans from small farms in Ethiopia, Colombia, and " +
   "Indonesia. We roast in small batches and ship within 48 hours of " +
   "roasting. Our customers are coffee enthusiasts in their late 20s to " +
   "40s who want better-than-supermarket beans without the hassle of " +
-  "visiting a roastery. Tone: warm, knowledgeable, a bit nerdy about " +
-  "extraction technique.'";
+  "visiting a roastery.'";
+
+const DEFAULT_UI_VISUAL_BRIEF_PLACEHOLDER =
+  "Paste / write a paragraph describing the visual identity of the brand: " +
+  "palette, typographies, polish level, design spirit (minimal / editorial / " +
+  "corporate / brutalist / fun…), general site mood. Used directly by the " +
+  "image model alongside the static robot composition template.";
+
+const DEFAULT_FORMULAIRE: FormulaireSchema = { forms: [] };
 
 const DEFAULT_PRIMARY: HexColor = "#3e2723";
 const DEFAULT_SECONDARY: HexColor = "#d7a86e";
 const DEFAULT_BACKGROUND: HexColor = "#fefaf5";
 
+/** Build the visualBrief sent to the image model from the UI section.
+ *  The image model receives: the brand visual paragraph, plus a
+ *  one-liner anchoring the paint job to the brand palette. The static
+ *  composition template (robot framing, bust, lighting style) is
+ *  appended downstream by step1GenerateRobot. */
+function uiToImageBrief(args: {
+  visualBrief: string;
+  buttonStyle: string;
+  inputStyle: string;
+}): string {
+  const parts: string[] = [];
+  parts.push(args.visualBrief.trim());
+  if (args.buttonStyle.trim().length > 0) {
+    parts.push(
+      `BRAND BUTTON STYLE (use as a finish/material reference for accents): ${args.buttonStyle.trim()}`,
+    );
+  }
+  if (args.inputStyle.trim().length > 0) {
+    parts.push(
+      `BRAND INPUT/SURFACE STYLE (use as a hint for cleanliness and detailing): ${args.inputStyle.trim()}`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
 export function BrandedRobot() {
   const { sdk, state } = useSdk();
 
-  // --- Design state ---
-  // --- URL analyzer state (optional pre-step → fills the description) ---
+  // --- URL analyzer state (4 independent sub-steps) ---
   const [urlInput, setUrlInput] = useState<string>("");
-  const [urlAnalyzing, setUrlAnalyzing] = useState(false);
-  const [urlAnalysis, setUrlAnalysis] = useState<UrlAnalysis | null>(null);
-  const [urlError, setUrlError] = useState<string | null>(null);
+  const [businessStep, setBusinessStep] = useState<UrlSubStepState<BusinessAnalysis>>({ status: "idle" });
+  const [formulaireStep, setFormulaireStep] = useState<UrlSubStepState<FormulaireAnalysis>>({ status: "idle" });
+  const [uiStep, setUiStep] = useState<UrlSubStepState<UiAnalysis>>({ status: "idle" });
+  const [logoStep, setLogoStep] = useState<UrlSubStepState<LogoExtraction>>({ status: "idle" });
+  const [runAllRunning, setRunAllRunning] = useState(false);
 
-  const [description, setDescription] = useState<string>("");
-  const [designRunning, setDesignRunning] = useState(false);
-  const [designProposal, setDesignProposal] = useState<DesignProposal | null>(null);
-  const [designError, setDesignError] = useState<string | null>(null);
+  // --- Business state ---
+  const [business, setBusiness] = useState<string>("");
 
-  const [visualBrief, setVisualBrief] = useState<string>("");
+  // --- Formulaire state (JSON edited as text) ---
+  const [formulaire, setFormulaire] = useState<FormulaireSchema>(DEFAULT_FORMULAIRE);
+  const [formulaireText, setFormulaireText] = useState<string>(
+    JSON.stringify(DEFAULT_FORMULAIRE, null, 2),
+  );
+  const [formulaireParseError, setFormulaireParseError] = useState<string | null>(null);
+
+  // --- UI state (formerly "Describe the brand") ---
   const [primaryColor, setPrimaryColor] = useState<HexColor>(DEFAULT_PRIMARY);
   const [secondaryColor, setSecondaryColor] = useState<HexColor>(DEFAULT_SECONDARY);
   const [backgroundColor, setBackgroundColor] = useState<HexColor>(DEFAULT_BACKGROUND);
-  const [briefEdited, setBriefEdited] = useState(false);
-  const [colorsEdited, setColorsEdited] = useState(false);
+  const [buttonStyle, setButtonStyle] = useState<string>("");
+  const [inputStyle, setInputStyle] = useState<string>("");
+  const [uiVisualBrief, setUiVisualBrief] = useState<string>("");
 
   // --- Logo upload state ---
   const [logo, setLogo] = useState<UploadedLogo | null>(null);
   const [logoError, setLogoError] = useState<string | null>(null);
+
+  // --- Agent prompt generator state ---
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentResult, setAgentResult] = useState<AgentPromptResult | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const [agentSystemPrompt, setAgentSystemPrompt] = useState<string>("");
+  const [agentPromptEdited, setAgentPromptEdited] = useState(false);
 
   // --- Step 1 (generate) state ---
   const [generated, setGenerated] = useState<Step1Result | null>(null);
@@ -211,7 +305,7 @@ export function BrandedRobot() {
   const [seedNonce, setSeedNonce] = useState(0);
   const [step1Error, setStep1Error] = useState<string | null>(null);
 
-  // --- Step 1.5 (prepare robot bg → transparent) state ---
+  // --- Step 1.5 (prepare robot bg) state ---
   const [step1_5Running, setStep1_5Running] = useState(false);
   const [step1_5Result, setStep1_5Result] = useState<Step1_5Result | null>(null);
   const [step1_5Tolerance, setStep1_5Tolerance] = useState(38);
@@ -228,7 +322,7 @@ export function BrandedRobot() {
   const [step3Result, setStep3Result] = useState<Step3LogoResult | null>(null);
   const [step3Error, setStep3Error] = useState<string | null>(null);
 
-  // --- Step 3.5 (smart treatment via Sonnet) state ---
+  // --- Step 3.5 (smart treatment) state ---
   const [treatmentRunning, setTreatmentRunning] = useState(false);
   const [treatmentPlan, setTreatmentPlan] = useState<TreatmentPlan | null>(null);
   const [treatedLogo, setTreatedLogo] = useState<AppliedTreatmentResult | null>(null);
@@ -247,22 +341,10 @@ export function BrandedRobot() {
   const [step4Result, setStep4Result] = useState<Step4CompositeResult | null>(null);
   const step4DebounceRef = useRef<number | null>(null);
 
-  // --- Step 5 (judge composite harmony) state ---
+  // --- Step 5 (judge) state ---
   const [judgeRunning, setJudgeRunning] = useState(false);
   const [judgment, setJudgment] = useState<CompositeJudgment | null>(null);
   const [judgeError, setJudgeError] = useState<string | null>(null);
-
-  // Populate editable fields when a fresh proposal arrives.
-  useEffect(() => {
-    if (designProposal === null) return;
-    if (!briefEdited) setVisualBrief(designProposal.visualBrief);
-    if (!colorsEdited) {
-      setPrimaryColor(designProposal.primaryColor);
-      setSecondaryColor(designProposal.secondaryColor);
-      setBackgroundColor(designProposal.backgroundColor);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [designProposal]);
 
   // Reset downstream when the robot image (or logo) changes.
   useEffect(() => {
@@ -319,8 +401,6 @@ export function BrandedRobot() {
             },
             logo: treatedLogo,
             settings,
-            // v14 — if Step 1.5 ran, composite onto the transparent-bg
-            // canvas; otherwise fall back to the raw (legacy v13 path).
             ...(step1_5Result
               ? { robotCanvasOverride: step1_5Result.processedCanvas }
               : {}),
@@ -337,7 +417,7 @@ export function BrandedRobot() {
   if (!isAuthenticated) {
     return (
       <section>
-        <h2>Branded robot — v14</h2>
+        <h2>Branded robot — v15</h2>
         <p className="lede">
           Sign in as an owner first so the agent can spend your wallet on
           the Sonnet + image-generation calls.
@@ -348,45 +428,122 @@ export function BrandedRobot() {
 
   // -------- handlers -----------------------------------------------------
 
-  const runUrlAnalyze = async () => {
-    setUrlAnalyzing(true);
-    setUrlError(null);
-    setUrlAnalysis(null);
+  const runBusinessStep = async (): Promise<boolean> => {
+    setBusinessStep({ status: "running" });
     try {
-      const r = await analyzeUrl(sdk, urlInput);
-      setUrlAnalysis(r);
-      // Auto-inject into the description textarea; the operator can
-      // tweak before clicking 'Generate design'.
-      setDescription(r.description);
+      const r = await analyzeBusinessFromUrl(sdk, urlInput, {
+        onRetry: (info) => setBusinessStep({ status: "running", retryInfo: info }),
+      });
+      setBusiness(r.business);
+      setBusinessStep({ status: "done", result: r });
+      return true;
     } catch (e) {
-      setUrlError(formatError(e));
-    } finally {
-      setUrlAnalyzing(false);
+      setBusinessStep({ status: "error", error: formatError(e) });
+      return false;
     }
   };
 
-  const runDesign = async () => {
-    setDesignRunning(true);
-    setDesignError(null);
-    setDesignProposal(null);
+  const runFormulaireStep = async (): Promise<boolean> => {
+    setFormulaireStep({ status: "running" });
     try {
-      const r = await designRobotFromDescription(sdk, description);
-      setDesignProposal(r);
+      const r = await analyzeFormulaireFromUrl(sdk, urlInput, {
+        onRetry: (info) => setFormulaireStep({ status: "running", retryInfo: info }),
+      });
+      setFormulaire(r.formulaire);
+      setFormulaireText(JSON.stringify(r.formulaire, null, 2));
+      setFormulaireParseError(null);
+      setFormulaireStep({ status: "done", result: r });
+      return true;
     } catch (e) {
-      setDesignError(formatError(e));
-    } finally {
-      setDesignRunning(false);
+      setFormulaireStep({ status: "error", error: formatError(e) });
+      return false;
     }
   };
 
-  const applyProposalToEditors = () => {
-    if (!designProposal) return;
-    setVisualBrief(designProposal.visualBrief);
-    setPrimaryColor(designProposal.primaryColor);
-    setSecondaryColor(designProposal.secondaryColor);
-    setBackgroundColor(designProposal.backgroundColor);
-    setBriefEdited(false);
-    setColorsEdited(false);
+  const runUiStep = async (): Promise<boolean> => {
+    setUiStep({ status: "running" });
+    try {
+      const r = await analyzeUiFromUrl(sdk, urlInput, {
+        onRetry: (info) => setUiStep({ status: "running", retryInfo: info }),
+      });
+      setPrimaryColor(r.ui.primaryColor);
+      setSecondaryColor(r.ui.secondaryColor);
+      setBackgroundColor(r.ui.backgroundColor);
+      setButtonStyle(r.ui.buttonStyle);
+      setInputStyle(r.ui.inputStyle);
+      setUiVisualBrief(r.ui.visualBrief);
+      setUiStep({ status: "done", result: r });
+      return true;
+    } catch (e) {
+      setUiStep({ status: "error", error: formatError(e) });
+      return false;
+    }
+  };
+
+  const runLogoStep = async (): Promise<boolean> => {
+    setLogoStep({ status: "running" });
+    try {
+      const r = await extractLogoFromUrl(sdk, urlInput, {
+        onRetry: (info) => setLogoStep({ status: "running", retryInfo: info }),
+      });
+      if (r.logoDataUri) {
+        try {
+          const { hasAlpha, width, height } = await detectAlphaInCorners(r.logoDataUri);
+          setLogo({
+            dataUri: r.logoDataUri,
+            filename: deriveLogoFilename(r.logoUrl),
+            hasAlpha,
+            width,
+            height,
+          });
+          setLogoError(null);
+        } catch (e) {
+          setLogoError(formatError(e));
+        }
+      }
+      setLogoStep({ status: "done", result: r });
+      return true;
+    } catch (e) {
+      setLogoStep({ status: "error", error: formatError(e) });
+      return false;
+    }
+  };
+
+  const runAllSubSteps = async () => {
+    setRunAllRunning(true);
+    try {
+      // Sequential with a small inter-step delay (3s) so we don't stack
+      // calls inside the same Anthropic per-minute window. Each step's
+      // failure doesn't block the others (they're independent).
+      await runBusinessStep();
+      await delay(3000);
+      await runFormulaireStep();
+      await delay(3000);
+      await runUiStep();
+      await delay(3000);
+      await runLogoStep();
+    } finally {
+      setRunAllRunning(false);
+    }
+  };
+
+  const onFormulaireTextChange = (text: string) => {
+    setFormulaireText(text);
+    if (text.trim().length === 0) {
+      setFormulaire(DEFAULT_FORMULAIRE);
+      setFormulaireParseError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.forms)) {
+        throw new Error("Expected an object shaped like { forms: [...] }");
+      }
+      setFormulaire(parsed as FormulaireSchema);
+      setFormulaireParseError(null);
+    } catch (e) {
+      setFormulaireParseError((e as Error).message);
+    }
   };
 
   const onLogoUpload = (file: File) => {
@@ -414,11 +571,36 @@ export function BrandedRobot() {
     reader.readAsDataURL(file);
   };
 
+  const runGenerateAgent = async () => {
+    setAgentRunning(true);
+    setAgentError(null);
+    setAgentResult(null);
+    try {
+      const r = await generateAgentSystemPrompt({
+        sdk,
+        business,
+        formulaire,
+      });
+      setAgentResult(r);
+      setAgentSystemPrompt(r.systemPrompt);
+      setAgentPromptEdited(false);
+    } catch (e) {
+      setAgentError(formatError(e));
+    } finally {
+      setAgentRunning(false);
+    }
+  };
+
   const runStep1Generate = async () => {
     setGenerating(true);
     setStep1Error(null);
     setGenerated(null);
     try {
+      const visualBrief = uiToImageBrief({
+        visualBrief: uiVisualBrief,
+        buttonStyle,
+        inputStyle,
+      });
       const r = await step1GenerateRobot({
         brand: buildAdHocBrand({
           visualBrief,
@@ -466,7 +648,6 @@ export function BrandedRobot() {
     try {
       const r = await detectTorsoByVision(sdk, generated.rawCanvas);
       setVision(r);
-      // Debug overlay: source image + chest center + logo disc
       const overlay = document.createElement("canvas");
       overlay.width = generated.rawCanvas.width;
       overlay.height = generated.rawCanvas.height;
@@ -514,7 +695,7 @@ export function BrandedRobot() {
     try {
       const r = await step3PrepareLogo({
         brand: buildAdHocBrand({
-          visualBrief,
+          visualBrief: uiVisualBrief,
           primaryColor,
           secondaryColor,
           backgroundColor,
@@ -559,9 +740,7 @@ export function BrandedRobot() {
     setTreatmentError(null);
     setStep4Result(null);
     try {
-      // The prepared logo as a Blob — needed for Sonnet vision input.
       const logoBlob = await canvasToBlob(
-        // step3Result.processedImg → canvas via decode
         await (async () => {
           const c = document.createElement("canvas");
           c.width = step3Result.processedImg.naturalWidth;
@@ -591,8 +770,6 @@ export function BrandedRobot() {
       });
       setTreatedLogo(applied);
 
-      // Auto-apply blend mode + opacity from the plan into Step 4
-      // settings. The operator can still override via the sliders.
       setSettings((s) => ({
         ...s,
         blendMode: plan.blendMode,
@@ -607,26 +784,26 @@ export function BrandedRobot() {
 
   return (
     <section>
-      <h2>Branded robot — v14 (description-driven, judged composite, transparent bg)</h2>
+      <h2>Branded robot — v15 (URL → 4 sections + agent + design)</h2>
       <p className="lede">
-        Describe the brand → Sonnet proposes a visualBrief + palette →
-        upload a logo → generate the robot → Sonnet locates the chest →
-        the logo is background-removed → Sonnet (vision) picks recolour
-        + blend + opacity → composite → Sonnet judges the result and
-        falls back to a bare robot if the logo doesn't sit well. The
-        operator can override anything via the Step 4 sliders.
+        Drop a URL → Sonnet fills <strong>Business</strong>,{" "}
+        <strong>Formulaire</strong>, <strong>UI</strong> and the{" "}
+        <strong>Logo</strong>. Generate the qualification agent's system
+        prompt from Business + Formulaire. Generate the robot mascot from
+        UI + the static composition template, then composite the logo on
+        the chest.
       </p>
 
-      {/* ===================== Analyse from URL (optional pre-step) ===================== */}
+      {/* ===================== Analyse from URL ===================== */}
       <section style={stepStyle}>
-        <h3>Optional — Analyse from URL</h3>
+        <h3>Optional — Analyse from URL (4 sub-steps)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Skip the typing : drop a URL, Sonnet fetches the page via
-          Anthropic's <code>web_fetch</code> tool and produces a brand
-          description that lands in the textarea below. You can still
-          edit it before generating the design.
+          v16 — the analysis is split into 4 small, independent calls so
+          a single timeout doesn't kill everything. Run them one by one
+          (the buttons below) or fire them all sequentially with{" "}
+          <em>Run all</em>. Each one auto-fills its destination section.
         </p>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <input
             type="url"
             value={urlInput}
@@ -641,91 +818,218 @@ export function BrandedRobot() {
               border: "1px solid #ccc",
               borderRadius: 4,
             }}
-            disabled={urlAnalyzing}
+            disabled={runAllRunning || anyStepRunning(businessStep, formulaireStep, uiStep, logoStep)}
           />
           <button
             type="button"
-            onClick={() => void runUrlAnalyze()}
-            disabled={urlAnalyzing || urlInput.trim().length < 8}
+            onClick={() => void runAllSubSteps()}
+            disabled={runAllRunning || urlInput.trim().length < 8}
           >
-            {urlAnalyzing
-              ? "Fetching…"
-              : urlAnalysis
-                ? "Re-analyse"
-                : "Analyse site"}
+            {runAllRunning ? "Running all…" : "Run all"}
           </button>
         </div>
-        {urlError && (
-          <div className="error" style={{ marginTop: 8 }}>{urlError}</div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          <UrlSubStepRow
+            label="1. Business"
+            hint="paragraph → Business section"
+            state={businessStep}
+            disabled={urlInput.trim().length < 8 || runAllRunning}
+            onRun={() => void runBusinessStep()}
+            describeResult={(r) => `${r.business.length} chars · ${r.elapsedMs.toFixed(0)}ms · ${r.creditsSpent.toLocaleString()} mc`}
+          />
+          <UrlSubStepRow
+            label="2. Formulaire"
+            hint="JSON → Formulaire section"
+            state={formulaireStep}
+            disabled={urlInput.trim().length < 8 || runAllRunning}
+            onRun={() => void runFormulaireStep()}
+            describeResult={(r) =>
+              `${r.formulaire.forms.length} form(s), ${r.formulaire.forms.reduce((s, f) => s + f.fields.length, 0)} field(s) · ${r.elapsedMs.toFixed(0)}ms · ${r.creditsSpent.toLocaleString()} mc`
+            }
+          />
+          <UrlSubStepRow
+            label="3. UI"
+            hint="colors + button/input style + visual brief → UI section"
+            state={uiStep}
+            disabled={urlInput.trim().length < 8 || runAllRunning}
+            onRun={() => void runUiStep()}
+            describeResult={(r) =>
+              `${r.ui.primaryColor} / ${r.ui.secondaryColor} / ${r.ui.backgroundColor} · ${r.elapsedMs.toFixed(0)}ms · ${r.creditsSpent.toLocaleString()} mc`
+            }
+          />
+          <UrlSubStepRow
+            label="4. Logo"
+            hint="logo URL discovery + best-effort client-side fetch → Logo section"
+            state={logoStep}
+            disabled={urlInput.trim().length < 8 || runAllRunning}
+            onRun={() => void runLogoStep()}
+            describeResult={(r) => {
+              const url = r.logoUrl
+                ? r.logoUrl.length > 60
+                  ? `${r.logoUrl.slice(0, 57)}…`
+                  : r.logoUrl
+                : "(none found)";
+              const status = r.logoDataUri
+                ? "fetched"
+                : r.logoUrl
+                  ? `URL only — ${r.logoFetchError || "fetch skipped"}`
+                  : "no logo URL";
+              return `${url} · ${status} · ${r.elapsedMs.toFixed(0)}ms · ${r.creditsSpent.toLocaleString()} mc`;
+            }}
+          />
+        </div>
+
+        {anyStepDone(businessStep, formulaireStep, uiStep, logoStep) && (
+          <div style={{ marginTop: 10, fontSize: "0.85em", color: "#555" }}>
+            Total cost so far :{" "}
+            <strong>
+              {totalCreditsSpent(businessStep, formulaireStep, uiStep, logoStep).toLocaleString()} mc
+            </strong>
+          </div>
         )}
-        {urlAnalysis && (
-          <dl className="kvtable" style={{ marginTop: 12, fontSize: "0.85em" }}>
-            <dt>URLs fetched</dt>
-            <dd>
-              {urlAnalysis.urlsFetched.length === 0 ? (
-                <em>none reported</em>
-              ) : (
-                <ul style={{ margin: 0, paddingLeft: 18 }}>
-                  {urlAnalysis.urlsFetched.map((u, i) => (
-                    <li key={i}>
-                      <code>{u.url}</code>
-                      {u.title && <span style={{ color: "#888" }}> — {u.title}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </dd>
-            <dt>Citations</dt>
-            <dd>
-              {urlAnalysis.citations.length === 0
-                ? <em>none</em>
-                : `${urlAnalysis.citations.length} span(s)`}
-            </dd>
-            <dt>web_fetch invocations</dt>
-            <dd>{urlAnalysis.webFetchInvocations}</dd>
-            <dt>Cost</dt>
-            <dd>{urlAnalysis.creditsSpent.toLocaleString()} mc</dd>
-          </dl>
-        )}
-        <p style={{ fontSize: "0.75em", color: "#888", marginTop: 8 }}>
-          Auto-injected into the &laquo; Describe the brand &raquo;
-          textarea below on success. Editable.
-        </p>
       </section>
 
-      {/* ===================== Describe the brand ===================== */}
+      {/* ===================== Business ===================== */}
       <section style={stepStyle}>
-        <h3>Describe the brand</h3>
+        <h3>Business</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Free text. Anything that helps Sonnet picture the robot: what
-          the company does, who the customers are, the tone you'd want on
-          the homepage, any visual references you already have in mind.
-          Don't write framing instructions — those are owned by the
-          locked composition template downstream.
+          Free text. What the company does, who its customers are, the
+          tone you'd want on the homepage. Used by the Agent generator.
         </p>
         <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={DEFAULT_DESCRIPTION_PLACEHOLDER}
-          rows={10}
+          value={business}
+          onChange={(e) => setBusiness(e.target.value)}
+          placeholder={DEFAULT_BUSINESS_PLACEHOLDER}
+          rows={8}
           style={textareaStyle}
-          disabled={designRunning}
         />
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75em", color: "#888", marginTop: 4 }}>
-          <span>{description.length} chars</span>
-          <span>min ~10 chars to enable Sonnet</span>
+          <span>{business.length} chars</span>
+          <span>min ~20 chars to enable Agent generation</span>
         </div>
+      </section>
+
+      {/* ===================== Formulaire ===================== */}
+      <section style={stepStyle}>
+        <h3>Formulaire</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          JSON describing the form(s) detected on the site (signup,
+          contact, checkout, newsletter…). Each form lists its fields
+          (name, label, type, required). Used by the Agent generator as
+          the data contract the agent must guide the prospect to fill.
+        </p>
+        <textarea
+          value={formulaireText}
+          onChange={(e) => onFormulaireTextChange(e.target.value)}
+          rows={14}
+          spellCheck={false}
+          style={{
+            ...textareaStyle,
+            fontFamily: "ui-monospace, monospace",
+            fontSize: "0.8em",
+          }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75em", marginTop: 4 }}>
+          <span style={{ color: "#888" }}>
+            {formulaire.forms.length} form(s) ·{" "}
+            {formulaire.forms.reduce((s, f) => s + f.fields.length, 0)} field(s)
+          </span>
+          <span style={{ color: formulaireParseError ? "#a40" : "#888" }}>
+            {formulaireParseError ? `JSON error: ${formulaireParseError}` : "JSON valid"}
+          </span>
+        </div>
+      </section>
+
+      {/* ===================== UI (was "Describe the brand") ===================== */}
+      <section style={stepStyle}>
+        <h3>UI</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          Graphic DNA of the brand — colours, button & input style,
+          visual brief / mood. Used by Step 1 (image generation) alongside
+          the static robot composition template.
+        </p>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 12,
+          }}
+        >
+          <ColorField
+            label="Primary"
+            value={primaryColor}
+            onChange={setPrimaryColor}
+            disabled={generating}
+          />
+          <ColorField
+            label="Secondary"
+            value={secondaryColor}
+            onChange={setSecondaryColor}
+            disabled={generating}
+          />
+          <ColorField
+            label="Background (dominant)"
+            value={backgroundColor}
+            onChange={setBackgroundColor}
+            disabled={generating}
+          />
+        </div>
+
+        <label style={{ display: "block", marginTop: 12 }}>
+          <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+            Button style
+          </span>
+          <textarea
+            value={buttonStyle}
+            onChange={(e) => setButtonStyle(e.target.value)}
+            rows={2}
+            placeholder="e.g. fully rounded pill, solid primary fill, no border, soft drop-shadow on hover."
+            style={textareaStyle}
+          />
+        </label>
+
+        <label style={{ display: "block", marginTop: 12 }}>
+          <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+            Input style
+          </span>
+          <textarea
+            value={inputStyle}
+            onChange={(e) => setInputStyle(e.target.value)}
+            rows={2}
+            placeholder="e.g. 1px neutral border, 8px radius, white background, label floats above on focus."
+            style={textareaStyle}
+          />
+        </label>
+
+        <label style={{ display: "block", marginTop: 12 }}>
+          <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+            Visual brief — brand mood / design spirit
+          </span>
+          <textarea
+            value={uiVisualBrief}
+            onChange={(e) => setUiVisualBrief(e.target.value)}
+            rows={8}
+            placeholder={DEFAULT_UI_VISUAL_BRIEF_PLACEHOLDER}
+            style={{
+              ...textareaStyle,
+              fontFamily: "ui-monospace, monospace",
+              fontSize: "0.82em",
+            }}
+          />
+          <div style={{ fontSize: "0.75em", color: "#888", marginTop: 4 }}>
+            {uiVisualBrief.length} chars
+          </div>
+        </label>
 
         <details style={{ marginTop: 12 }}>
           <summary style={{ cursor: "pointer", fontSize: "0.85em" }}>
-            View the static framing brief (passed to the design agent
-            alongside your description)
+            View the static framing brief (the robot bust convention)
           </summary>
           <p style={{ fontSize: "0.75em", color: "#666", margin: "6px 0" }}>
-            This is the bust convention every design must respect — read
-            by the design agent in its system prompt before it writes the
-            visualBrief. Identical for every brand to keep the mascot
-            library visually consistent.
+            Identical for every brand to keep the mascot library visually
+            consistent. Read by the image model alongside your UI brief.
           </p>
           <pre style={{
             background: "#f7f7f7",
@@ -739,108 +1043,9 @@ export function BrandedRobot() {
           </pre>
         </details>
 
-        <div className="row" style={{ gap: 8, marginTop: 8 }}>
-          <button
-            type="button"
-            onClick={() => void runDesign()}
-            disabled={designRunning || description.trim().length < 10}
-          >
-            {designRunning
-              ? "Asking Sonnet…"
-              : designProposal
-                ? "Re-generate design"
-                : "Generate design"}
-          </button>
-          {designProposal && (briefEdited || colorsEdited) && (
-            <button type="button" onClick={applyProposalToEditors}>
-              Reset editors to last proposal
-            </button>
-          )}
-        </div>
-
-        {designError && (
-          <div className="error" style={{ marginTop: 8 }}>{designError}</div>
-        )}
-
-        {designProposal && (
-          <dl className="kvtable" style={{ marginTop: 12, fontSize: "0.85em" }}>
-            <dt>Sonnet reasoning</dt>
-            <dd style={{ fontStyle: "italic" }}>{designProposal.reasoning}</dd>
-            <dt>Cost</dt>
-            <dd>{designProposal.creditsSpent.toLocaleString()} mc</dd>
-          </dl>
-        )}
-      </section>
-
-      {/* ===================== Design — editable ===================== */}
-      <section style={stepStyle}>
-        <h3>Design (editable)</h3>
-        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Sonnet's proposal lands here. Tweak anything before generation
-          — the locked composition template (crop, pose, lighting style)
-          is appended automatically.
-        </p>
-
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
-            visualBrief
-            {briefEdited && designProposal && (
-              <em style={{ color: "#a60", marginLeft: 8 }}>(edited)</em>
-            )}
-          </span>
-          <textarea
-            value={visualBrief}
-            onChange={(e) => {
-              setVisualBrief(e.target.value);
-              setBriefEdited(true);
-            }}
-            rows={10}
-            placeholder="Sonnet will populate this — or write a robot brief yourself."
-            style={{
-              ...textareaStyle,
-              fontFamily: "ui-monospace, monospace",
-              fontSize: "0.82em",
-            }}
-            disabled={generating}
-          />
-          <div style={{ fontSize: "0.75em", color: "#888", marginTop: 4 }}>
-            {visualBrief.length} chars
-          </div>
-        </label>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-          }}
-        >
-          <ColorField
-            label="Primary"
-            value={primaryColor}
-            onChange={(v) => { setPrimaryColor(v); setColorsEdited(true); }}
-            edited={colorsEdited && designProposal !== null}
-            disabled={generating}
-          />
-          <ColorField
-            label="Secondary"
-            value={secondaryColor}
-            onChange={(v) => { setSecondaryColor(v); setColorsEdited(true); }}
-            edited={colorsEdited && designProposal !== null}
-            disabled={generating}
-          />
-          <ColorField
-            label="Background"
-            value={backgroundColor}
-            onChange={(v) => { setBackgroundColor(v); setColorsEdited(true); }}
-            edited={colorsEdited && designProposal !== null}
-            disabled={generating}
-          />
-        </div>
-
         <details style={{ marginTop: 12 }}>
           <summary style={{ cursor: "pointer", fontSize: "0.85em" }}>
-            View the locked composition template (appended automatically at Step 1)
+            View the locked composition template (appended at Step 1)
           </summary>
           <pre style={{ background: "#f7f7f7", padding: 8, borderRadius: 4, fontSize: "0.75em", whiteSpace: "pre-wrap", marginTop: 6 }}>
             {COMPOSITION_TEMPLATE}
@@ -850,10 +1055,11 @@ export function BrandedRobot() {
 
       {/* ===================== Logo upload ===================== */}
       <section style={stepStyle}>
-        <h3>Logo upload</h3>
+        <h3>Logo</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          PNG, JPEG, SVG, or WebP. Transparent-background logos are
-          detected automatically (you can override with the toggle).
+          PNG, JPEG, SVG, or WebP. Auto-populated by the URL analyzer when
+          a logo is found (and CORS allows the client-side fetch).
+          Transparent-background logos are detected automatically.
         </p>
         <label
           className="row"
@@ -913,12 +1119,101 @@ export function BrandedRobot() {
         )}
       </section>
 
+      {/* ===================== Generate Agent ===================== */}
+      <section style={stepStyle}>
+        <h3>Generate Agent</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          Sonnet 4.6 turns <em>Business</em> + <em>Formulaire</em> into the
+          system prompt of a prospect-qualification agent. The agent's
+          mission: guide the prospect to fill the formulaire, then emit
+          the JSON contract at the end.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => void runGenerateAgent()}
+          disabled={
+            agentRunning ||
+            business.trim().length < 20 ||
+            formulaire.forms.reduce((s, f) => s + f.fields.length, 0) === 0 ||
+            formulaireParseError !== null
+          }
+        >
+          {agentRunning
+            ? "Asking Sonnet…"
+            : agentResult
+              ? "Re-generate agent prompt"
+              : "Generate agent prompt"}
+        </button>
+        {(business.trim().length < 20 ||
+          formulaire.forms.reduce((s, f) => s + f.fields.length, 0) === 0 ||
+          formulaireParseError !== null) && (
+          <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
+            Need a non-trivial Business and at least one Formulaire field.
+          </em>
+        )}
+
+        {agentError && (
+          <div className="error" style={{ marginTop: 8 }}>{agentError}</div>
+        )}
+
+        {(agentResult || agentSystemPrompt.length > 0) && (
+          <>
+            <label style={{ display: "block", marginTop: 12 }}>
+              <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+                System prompt
+                {agentPromptEdited && (
+                  <em style={{ color: "#a60", marginLeft: 8 }}>(edited)</em>
+                )}
+              </span>
+              <textarea
+                value={agentSystemPrompt}
+                onChange={(e) => {
+                  setAgentSystemPrompt(e.target.value);
+                  setAgentPromptEdited(true);
+                }}
+                rows={16}
+                style={{
+                  ...textareaStyle,
+                  fontFamily: "ui-monospace, monospace",
+                  fontSize: "0.8em",
+                }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75em", color: "#888", marginTop: 4 }}>
+                <span>{agentSystemPrompt.length} chars</span>
+                {agentResult && agentPromptEdited && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAgentSystemPrompt(agentResult.systemPrompt);
+                      setAgentPromptEdited(false);
+                    }}
+                    style={{ fontSize: "0.85em" }}
+                  >
+                    Reset to last Sonnet output
+                  </button>
+                )}
+              </div>
+            </label>
+            {agentResult && (
+              <dl className="kvtable" style={{ marginTop: 12, fontSize: "0.85em" }}>
+                <dt>Sonnet reasoning</dt>
+                <dd style={{ fontStyle: "italic" }}>{agentResult.reasoning}</dd>
+                <dt>Cost</dt>
+                <dd>{agentResult.creditsSpent.toLocaleString()} mc</dd>
+              </dl>
+            )}
+          </>
+        )}
+      </section>
+
       {/* ===================== Step 1 — Generate ===================== */}
       <section style={stepStyle}>
         <h3>Step 1 — Generate robot image</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Sends <code>visualBrief</code> + locked composition template +
-          colour palette to the selected image model.
+          Sends the <em>UI</em> visual brief (+ button/input style hints)
+          + locked composition template + UI palette to the selected
+          image model.
         </p>
 
         <label style={{ display: "block", marginBottom: 8 }}>
@@ -939,7 +1234,7 @@ export function BrandedRobot() {
           <button
             type="button"
             onClick={() => void runStep1Generate()}
-            disabled={generating || visualBrief.trim().length === 0}
+            disabled={generating || uiVisualBrief.trim().length === 0}
           >
             {generating ? "Generating…" : generated ? "Generate" : "Generate robot"}
           </button>
@@ -972,15 +1267,14 @@ export function BrandedRobot() {
         )}
       </section>
 
-      {/* ===================== Step 1.5 — Prepare robot bg (transparent) ===================== */}
+      {/* ===================== Step 1.5 — Prepare robot bg ===================== */}
       <section style={stepStyle}>
         <h3>Step 1.5 — Prepare robot background (make transparent)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          v14 — image models drift on the requested bg colour, so instead
-          of trying to match it pixel-perfect on the page, we flood-fill
-          the (uniform, halo-free) bg to <code>alpha=0</code>. The
-          downstream composite then sits cleanly on any page colour.
-          Mirrors Step 3 for logos.
+          Image models drift on the requested bg colour, so instead of
+          trying to match it pixel-perfect on the page, we flood-fill the
+          (uniform, halo-free) bg to <code>alpha=0</code>. The downstream
+          composite then sits cleanly on any page colour.
         </p>
 
         <label style={{ display: "block", maxWidth: 360, marginBottom: 10 }}>
@@ -997,7 +1291,6 @@ export function BrandedRobot() {
           <span style={{ fontSize: "0.75em", color: "#888" }}>
             Low = preserves contour detail (risk of leaving a coloured
             halo). High = aggressive (risk of eating soft body shadows).
-            38 = legacy Step 2 internal value, good default.
           </span>
         </label>
 
@@ -1179,10 +1472,7 @@ export function BrandedRobot() {
           Sonnet 4.6 vision sees the prepared logo, receives the chest
           surface colour (Step 2) and the brand palette, and decides
           THREE things at once: whether to recolour the logo, which
-          blend mode to use, and at what opacity. The plan is applied
-          immediately — recolour runs (or is skipped), and the chosen
-          blend / opacity overwrite Step 4 settings. You can still
-          tweak the sliders below to override.
+          blend mode to use, and at what opacity.
         </p>
 
         <button
@@ -1193,8 +1483,8 @@ export function BrandedRobot() {
           {treatmentRunning
             ? "Asking Sonnet…"
             : treatmentPlan
-              ? "Re-plan &amp; apply"
-              : "Plan &amp; apply treatment"}
+              ? "Re-plan & apply"
+              : "Plan & apply treatment"}
         </button>
         {!step3Result && (
           <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
@@ -1294,15 +1584,13 @@ export function BrandedRobot() {
         )}
       </section>
 
-      {/* ===================== Step 5 — Judge composite ===================== */}
+      {/* ===================== Step 5 — Judge ===================== */}
       <section style={stepStyle}>
         <h3>Step 5 — Judge composite harmony (Sonnet)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
           Sonnet 4.6 vision sees the final composite and decides whether
           the logo is mounted harmoniously, or whether we should fall
-          back to the bare robot. If the verdict is{" "}
-          <code>skip_logo</code>, the &ldquo;Final output&rdquo; panel
-          below shows the robot WITHOUT the logo.
+          back to the bare robot.
         </p>
         <button
           type="button"
@@ -1377,8 +1665,6 @@ export function BrandedRobot() {
             const useComposite =
               step4Result !== null &&
               (judgment === null || judgment.verdict === "harmonious");
-            // v14 — when shipping the bare robot, prefer the
-            // transparent-bg version if Step 1.5 ran.
             const bareUri = step1_5Result
               ? step1_5Result.processedDataUri
               : generated.rawDataUri;
@@ -1401,6 +1687,104 @@ export function BrandedRobot() {
       )}
     </section>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  URL sub-step row                                                          */
+/* -------------------------------------------------------------------------- */
+
+function UrlSubStepRow<T>({
+  label,
+  hint,
+  state,
+  disabled,
+  onRun,
+  describeResult,
+}: {
+  readonly label: string;
+  readonly hint: string;
+  readonly state: UrlSubStepState<T>;
+  readonly disabled: boolean;
+  readonly onRun: () => void;
+  readonly describeResult: (r: T) => string;
+}) {
+  const statusBadge = (() => {
+    switch (state.status) {
+      case "idle":
+        return <span style={{ color: "#888" }}>idle</span>;
+      case "running":
+        if (state.retryInfo) {
+          return (
+            <span style={{ color: "#a60" }}>
+              rate-limited · retry {state.retryInfo.attempt}/{state.retryInfo.maxAttempts} in{" "}
+              {(state.retryInfo.waitMs / 1000).toFixed(0)}s…
+            </span>
+          );
+        }
+        return <span style={{ color: "#06c" }}>running…</span>;
+      case "done":
+        return <span style={{ color: "#0a0" }}>✓ done</span>;
+      case "error":
+        return <span style={{ color: "#c00" }}>✗ error</span>;
+    }
+  })();
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "auto auto 1fr",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 10px",
+        border: "1px solid #ececec",
+        borderRadius: 6,
+        background: state.status === "running" ? "#f4f9ff" : "#fff",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onRun}
+        disabled={disabled || state.status === "running"}
+        style={{ minWidth: 130 }}
+      >
+        {state.status === "running"
+          ? "Running…"
+          : state.status === "done" || state.status === "error"
+            ? `Re-run ${label.replace(/^\d\.\s*/, "")}`
+            : `Run ${label.replace(/^\d\.\s*/, "")}`}
+      </button>
+      <div style={{ fontSize: "0.85em", whiteSpace: "nowrap" }}>{statusBadge}</div>
+      <div style={{ fontSize: "0.8em", color: "#555", lineHeight: 1.35 }}>
+        <div><strong>{label}</strong> — {hint}</div>
+        {state.status === "done" && (
+          <div style={{ color: "#0a0", marginTop: 2 }}>
+            {describeResult(state.result)}
+          </div>
+        )}
+        {state.status === "error" && (
+          <div style={{ color: "#c00", marginTop: 2, wordBreak: "break-word" }}>
+            {state.error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Helpers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function deriveLogoFilename(url: string): string {
+  if (!url) return "logo";
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    return last ?? "logo";
+  } catch {
+    return "logo";
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1487,20 +1871,17 @@ function ColorField({
   label,
   value,
   onChange,
-  edited,
   disabled,
 }: {
   readonly label: string;
   readonly value: HexColor;
   readonly onChange: (v: HexColor) => void;
-  readonly edited: boolean;
   readonly disabled: boolean;
 }) {
   return (
     <label style={{ display: "block" }}>
       <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
         {label}
-        {edited && <em style={{ color: "#a60", marginLeft: 8 }}>(edited)</em>}
       </span>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
