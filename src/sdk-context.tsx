@@ -93,7 +93,25 @@ export function SdkProvider({ children }: { readonly children: ReactNode }) {
       sessionStore: localStorageStore(),
     }),
   );
-  const [sdk] = useState(() => new AithosSDK({ auth, appDid: APP_DID }));
+  const [sdk] = useState(() => {
+    // The `web` namespace (sdk.web.extract / sdk.web.fetchAsset)
+    // points by default at https://extract.aithos.be — but CloudFront
+    // isn't wired in front of the web-extractor Lambda yet, so we
+    // override with the raw Function URL until the subdomain lands.
+    // VITE_WEB_EXTRACTOR_URL lets you point at staging or a fresh
+    // deploy without touching the source.
+    const fromEnv = (import.meta as { env?: { VITE_WEB_EXTRACTOR_URL?: string } })
+      .env?.VITE_WEB_EXTRACTOR_URL?.trim();
+    const webEndpoint =
+      fromEnv && fromEnv.length > 0
+        ? fromEnv
+        : "https://7ialyikvdh3rq3fzk33hzmou340imupy.lambda-url.eu-west-3.on.aws";
+    return new AithosSDK({
+      auth,
+      appDid: APP_DID,
+      endpoints: { web: webEndpoint.replace(/\/+$/, "") },
+    });
+  });
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
 

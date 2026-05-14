@@ -1,7 +1,7 @@
 {
   "name": "aithos-app-example",
   "version": "0.0.1",
-  "description": "Public example app for @aithos/sdk — sign-in, ethos editing, mandate lifecycle, compute & wallet.",
+  "description": "Public example app for @aithos/sdk \u2014 sign-in, ethos editing, mandate lifecycle, compute & wallet.",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@aithos/protocol-client": "^0.1.0-alpha.13",
-    "@aithos/sdk": "0.1.0-alpha.20",
+    "@aithos/sdk": "0.1.0-alpha.24",
     "@mediapipe/tasks-vision": "^0.10.20",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

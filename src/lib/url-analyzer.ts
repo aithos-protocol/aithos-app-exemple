@@ -1,24 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Mathieu Colla
 
-// URL → structured brand analysis (v16 — split into 4 independent calls).
+// URL → structured brand analysis (single web.extract + 1 LLM call).
 //
-// v15 packed business + formulaire + ui + logoUrl into a single
-// invokeUrlFetch call. That call timed out on slow sites (Failed to
-// fetch, > ~60s end-to-end). v16 splits the work into 4 focused calls
-// the operator can fire one by one, in parallel, or sequentially:
+// Pipeline:
 //
-//   - analyzeBusinessFromUrl(sdk, url)   → { business }
-//   - analyzeFormulaireFromUrl(sdk, url) → { formulaire }
-//   - analyzeUiFromUrl(sdk, url)         → { ui }
-//   - extractLogoFromUrl(sdk, url)       → { logoUrl, logoDataUri }
+//   1. ONE `web.extract` call — deterministic server-side Playwright +
+//      sanitize-html + computed visual signature. Returns a structured
+//      snapshot (title, headings, links, forms, palette, primary colour,
+//      typography, …) in ~5-15s for 1 mc. The lambda also resolves the
+//      best logo asset (apple-touch-icon, declared <link rel="icon">,
+//      conventional well-known paths) and ships its bytes base64-encoded
+//      inside the response.
+//   2. ONE `invokeBedrock` (Claude Sonnet 4.6) call that takes the
+//      snapshot as JSON input and produces the UrlAnalysis shape callers
+//      consume — business paragraph, formulaire schema, ui descriptor,
+//      logo URL.
 //
-// Each call uses a small system prompt focused on its single concern,
-// modest maxTokens (~800-1500), and at most 1-2 sub-page fetches.
-// The 4 results combine into the same UrlAnalysis shape used by v15
-// for callers that want everything in one object.
+// Wall time: ~8-20s. Cost: ~5-15 mc (1 for the extract, the rest for
+// ~5-10K input tokens to Sonnet). The four UI sub-step buttons
+// (business / formulaire / ui / logo) share the same extraction +
+// parse through a per-URL module-level cache, so clicking three of
+// them sequentially still costs one extract + one LLM call.
+//
+// History: this module replaced a v16 implementation that fired four
+// separate `compute.invokeUrlFetch` calls against the Anthropic API
+// directly (~80-120 mc, 60-120s wall time). That code path is removed
+// in alpha.24.
 
 import type { AithosSDK } from "@aithos/sdk";
+import type { ExtractData } from "@aithos/sdk";
 
 import type { HexColor } from "./brand-types.js";
 
@@ -75,7 +86,7 @@ export interface AnalysisMeta {
   readonly citations: ReadonlyArray<{ readonly url: string; readonly citedText: string }>;
   readonly creditsSpent: number;
   readonly webFetchInvocations: number;
-  /** Wall-clock time (ms) the SDK call took. */
+  /** Wall-clock time (ms) the call took. */
   readonly elapsedMs: number;
   /** Raw assistant content for debugging. */
   readonly rawContent: string;
@@ -100,6 +111,20 @@ export interface LogoExtraction extends AnalysisMeta {
   readonly logoDataUri: string;
   /** Last error from the logo-fetch attempt. Empty on success. */
   readonly logoFetchError: string;
+  /**
+   * Where the asset came from.
+   *   "lambda:<source>"  — the web-extractor lambda resolved the asset
+   *     server-side (apple-touch-icon, declared icon link, well-known
+   *     path). Preferred: 0 extra Sonnet credits, no CORS dance.
+   *   "sonnet"           — Sonnet identified the logo inside the page HTML
+   *     and the client fetched it. Fallback when the lambda found nothing.
+   *   null               — nothing found at all.
+   */
+  readonly logoSource: string | null;
+  /** Decoded image width in px, when we managed to fetch it. */
+  readonly logoWidth: number;
+  /** Decoded image height in px, when we managed to fetch it. */
+  readonly logoHeight: number;
 }
 
 /** Combined shape — kept for callers that want everything in one object. */
@@ -114,47 +139,6 @@ export interface UrlAnalysis {
   readonly webFetchInvocations: number;
   readonly urlsFetched: ReadonlyArray<{ readonly url: string; readonly title?: string }>;
   readonly citations: ReadonlyArray<{ readonly url: string; readonly citedText: string }>;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  SDK boundary                                                              */
-/* -------------------------------------------------------------------------- */
-
-interface UrlFetchArgs {
-  prompt: string;
-  system?: string;
-  model?: "claude-haiku-4-5" | "claude-sonnet-4-6" | "claude-opus-4-6";
-  maxTokens?: number;
-  maxFetches?: number;
-  maxContentTokens?: number;
-  citations?: boolean;
-  allowedDomains?: readonly string[];
-  blockedDomains?: readonly string[];
-}
-
-interface UrlFetchResult {
-  content: string;
-  citations: ReadonlyArray<{
-    url: string;
-    citedText: string;
-    documentTitle?: string;
-  }>;
-  urlsFetched: ReadonlyArray<{ url: string; title?: string }>;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    webFetchInvocations: number;
-  };
-  creditsCharged: number;
-}
-
-function getInvokeUrlFetch(sdk: AithosSDK): (args: UrlFetchArgs) => Promise<UrlFetchResult> {
-  // Cast at the boundary: invokeUrlFetch landed in @aithos/sdk
-  // alpha.20. The example app's installed version may still be older.
-  const compute = sdk.compute as unknown as {
-    invokeUrlFetch(args: UrlFetchArgs): Promise<UrlFetchResult>;
-  };
-  return compute.invokeUrlFetch.bind(compute);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -178,7 +162,7 @@ export interface RetryOptions {
   readonly onRetry?: (info: RetryProgress) => void;
 }
 
-/** Heuristic: does this error look like an Anthropic rate-limit signal? */
+/** Heuristic: does this error look like a backend rate-limit signal? */
 function isRateLimitError(e: unknown): boolean {
   const msg =
     e instanceof Error
@@ -200,7 +184,7 @@ function isRateLimitError(e: unknown): boolean {
 const DEFAULT_RETRY_DELAYS_MS = [10_000, 20_000, 40_000];
 
 /**
- * Wrap an async fn with auto-retry on Anthropic rate-limit errors.
+ * Wrap an async fn with auto-retry on rate-limit errors.
  *
  * Backoff schedule: 10s, 20s, 40s (3 retries max). Non rate-limit
  * errors propagate immediately. The optional `onRetry` callback fires
@@ -245,433 +229,644 @@ export function delay(ms: number): Promise<void> {
   return sleep(ms);
 }
 
-function assertHttpUrl(url: string): string {
+/* -------------------------------------------------------------------------- */
+/*  LLM system prompt                                                         */
+/* -------------------------------------------------------------------------- */
+
+const PARSE_SNAPSHOT_SYSTEM = [
+  "Tu es un assistant qui transforme un SNAPSHOT structuré d'un site",
+  "web en une description brand-research réutilisable. Le snapshot a",
+  "déjà été extrait et nettoyé par un système séparé : tu n'as pas à",
+  "faire de fetch, juste à lire et synthétiser.",
+  "",
+  "Tu reçois un objet JSON avec ces champs :",
+  "  - meta : { title, description, lang, og:* }",
+  "  - structure : { headings: [{level, text}], sections, nav_links,",
+  "      forms: [{ action, method, fields: [{type, name, required}] }] }",
+  "  - content : { main_text, main_html (extrait), links }",
+  "  - styles  : { css (purgé, minifié), inline_styles_count }",
+  "  - visual_signature : {",
+  "      colors: { palette[], background, text, primary, link },",
+  "      typography: { heading_font, body_font, size_scale, base_size_px },",
+  "      radii: { button, input, card },",
+  "      spacing: { base_unit_px, common_gaps_px },",
+  "      layout: { max_content_width_px, mode },",
+  "      components: { buttons, inputs, cards }",
+  "    }",
+  "",
+  "Réponds UNIQUEMENT avec un objet JSON, sans markdown, sans",
+  "backticks, sans commentaire. Schéma exact :",
+  "",
+  "{",
+  '  "business": "<paragraphe FR de 6-10 phrases décrivant l\'entreprise, son audience, son ton, l\'ambiance générale de la marque. NE PAS parler de cadrage/composition/torse/chest>",',
+  '  "formulaire": {',
+  '    "forms": [',
+  "      {",
+  '        "name": "<slug court : signup | contact | newsletter | quote | demo | …>",',
+  '        "purpose": "<1 phrase, à quoi sert le formulaire>",',
+  '        "fields": [',
+  "          {",
+  '            "name": "<snake_case ou camelCase>",',
+  '            "label": "<label humain tel que vu sur le site>",',
+  '            "type": "<text | email | tel | url | number | textarea | select | checkbox | radio | date>",',
+  '            "required": <true|false>,',
+  '            "options": ["…"],   // requis si type=select|radio',
+  '            "placeholder": "…"  // optionnel',
+  "          }",
+  "        ]",
+  "      }",
+  "    ]",
+  "  },",
+  '  "ui": {',
+  '    "primaryColor": "#rrggbb",       // si visual_signature.colors.primary est valide, utilise-le',
+  '    "secondaryColor": "#rrggbb",     // déduis depuis la palette',
+  '    "backgroundColor": "#rrggbb",    // depuis visual_signature.colors.background',
+  '    "buttonStyle": "<1-2 phrases : forme, bordure, ombre, fill/outline>",',
+  '    "inputStyle": "<1-2 phrases : bordure, padding, fond, focus>",',
+  '    "visualBrief": "<paragraphe FR de 4-8 phrases : identité visuelle, palette, typographie, polish, esprit>"',
+  "  },",
+  '  "logoUrl": "<URL ABSOLUE https://… du logo principal vu dans les images ou nav_links ; chaîne vide si introuvable>"',
+  "}",
+  "",
+  "RÈGLES :",
+  "- TOUTES les couleurs au format #rrggbb (6 chars lowercase).",
+  "- Si visual_signature.colors.primary est null/manquant, choisis la",
+  "  couleur la plus saturée non-grise de la palette (avec weight élevé).",
+  "- Si aucun formulaire n'est détecté, renvoie {\"forms\": []}. Ne fabrique",
+  "  pas de form fictif.",
+  "- Pour logoUrl, cherche dans content.images et structure.nav_links un",
+  "  src/href qui contient 'logo', 'brand', ou le nom du site. Sinon",
+  "  fallback sur un favicon. URL DOIT être absolue (https://...).",
+  "- Pour buttonStyle/inputStyle : lis visual_signature.components.buttons[0]",
+  "  et inputs[0] (radius, padding, bg, fg) et écris une description courte.",
+].join("\n");
+
+/* -------------------------------------------------------------------------- */
+/*  Snapshot compaction — keep the LLM payload small                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Strip the fattest fields (full main_html, full css) from the snapshot
+ * before sending to the LLM. We keep:
+ *   - meta (titles, og)
+ *   - the first 8000 chars of main_text (typical Sonnet 4.6 input window
+ *     is huge, but we want fast / cheap calls)
+ *   - structure (headings, forms, nav_links)
+ *   - content.images (just src/alt — logo discovery hint)
+ *   - styles.inline_styles_count (signal only, not the full CSS string)
+ *   - the full visual_signature (small, deterministic)
+ *
+ * This keeps the prompt around 5-15 KB → ~2-5K tokens.
+ */
+function compactSnapshot(data: ExtractData): Record<string, unknown> {
+  const truncate = (s: string, n: number) =>
+    s.length > n ? s.slice(0, n) + "…[truncated]" : s;
+  return {
+    url: data.url,
+    final_url: data.final_url,
+    meta: data.meta,
+    structure: {
+      headings: data.structure.headings.slice(0, 40),
+      nav_links: data.structure.nav_links.slice(0, 30),
+      forms: data.structure.forms,
+    },
+    content: {
+      main_text: truncate(data.content.main_text, 8000),
+      images: data.content.images.slice(0, 20).map((i) => ({
+        src: i.src,
+        alt: i.alt,
+      })),
+      links: {
+        internal_count: data.content.links.internal.length,
+        external_count: data.content.links.external.length,
+      },
+    },
+    styles: {
+      inline_styles_count: data.styles.inline_styles_count,
+      css_bytes: data.styles.css.length,
+    },
+    visual_signature: data.visual_signature,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  SDK boundary — invokeBedrock cast (text-only)                             */
+/* -------------------------------------------------------------------------- */
+
+interface InvokeBedrockArgsLite {
+  mandateId?: string;
+  model: "claude-sonnet-4-6" | "claude-haiku-4-5" | "claude-opus-4-6";
+  messages: ReadonlyArray<{ role: "user" | "assistant"; content: string }>;
+  system?: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+interface InvokeBedrockResultLite {
+  content: string;
+  stopReason: string;
+  usage: { inputTokens: number; outputTokens: number };
+  creditsCharged: number;
+  walletBalance: number;
+  auditId: string;
+}
+
+function getInvokeBedrock(
+  sdk: AithosSDK,
+): (args: InvokeBedrockArgsLite) => Promise<InvokeBedrockResultLite> {
+  return (sdk.compute as unknown as {
+    invokeBedrock(args: InvokeBedrockArgsLite): Promise<InvokeBedrockResultLite>;
+  }).invokeBedrock.bind(sdk.compute);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Snapshot + parsed types                                                   */
+/* -------------------------------------------------------------------------- */
+
+export interface AnalyzerSnapshot extends AnalysisMeta {
+  readonly data: ExtractData;
+  /** Extraction credits (always 1 from the web extractor proxy). */
+  readonly extractCreditsSpent: number;
+}
+
+export interface ParsedAnalysis extends AnalysisMeta {
+  readonly business: string;
+  readonly formulaire: FormulaireSchema;
+  readonly ui: UiDescriptor;
+  readonly logoUrl: string;
+  /** Wall time + tokens for the LLM parse step only. */
+  readonly llmCreditsSpent: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Public API                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Step 1 of 2 — call the web-extractor proxy to produce a structured
+ * snapshot of the target URL. Costs 1 mc on success.
+ */
+export async function extractSnapshot(
+  sdk: AithosSDK,
+  url: string,
+  retry: RetryOptions = {},
+): Promise<AnalyzerSnapshot> {
   const trimmed = url.trim();
   if (!/^https?:\/\/\S+\.\S+/i.test(trimmed)) {
     throw new Error("URL must start with http:// or https:// and look like a real URL");
   }
-  return trimmed;
+
+  console.log("[url-analyzer] extract call on", trimmed);
+  const t0 = performance.now();
+  const r = await withRetryOnRateLimit(
+    () =>
+      sdk.web.extract({
+        url: trimmed,
+        // The Lambda hard-caps at 60s; pass 30s default for snappy
+        // failure on slow sites.
+        timeoutMs: 30_000,
+      }),
+    retry,
+  );
+  const elapsedMs = performance.now() - t0;
+  console.log(
+    `[url-analyzer] extract returned in ${elapsedMs.toFixed(0)}ms, ` +
+    `credits=${r.creditsCharged}, balance=${r.walletBalance}`,
+  );
+
+  return {
+    data: r.data,
+    extractCreditsSpent: r.creditsCharged,
+    elapsedMs,
+    urlsFetched: [
+      r.data.meta.title !== null
+        ? { url: r.data.final_url, title: r.data.meta.title }
+        : { url: r.data.final_url },
+    ],
+    citations: [],
+    creditsSpent: r.creditsCharged,
+    webFetchInvocations: 0,
+    rawContent: "",
+  };
 }
 
-function metaFrom(r: UrlFetchResult, elapsedMs: number): AnalysisMeta {
+/**
+ * Step 2 of 2 — pass the compacted snapshot to Claude Sonnet to produce
+ * the UrlAnalysis shape callers consume.
+ */
+export async function parseSnapshot(
+  sdk: AithosSDK,
+  snapshot: AnalyzerSnapshot,
+  retry: RetryOptions = {},
+): Promise<ParsedAnalysis> {
+  const invokeBedrock = getInvokeBedrock(sdk);
+  const compact = compactSnapshot(snapshot.data);
+  const promptJson = JSON.stringify(compact, null, 2);
+
+  console.log(
+    `[url-analyzer] parse call (${(promptJson.length / 1024).toFixed(1)} KB payload)`,
+  );
+  const t0 = performance.now();
+  const r = await withRetryOnRateLimit(
+    () =>
+      invokeBedrock({
+        model: "claude-sonnet-4-6",
+        system: PARSE_SNAPSHOT_SYSTEM,
+        messages: [
+          {
+            role: "user",
+            content: `SNAPSHOT du site :\n\n${promptJson}\n\nRenvoie le JSON {business, formulaire, ui, logoUrl} comme spécifié dans le system prompt.`,
+          },
+        ],
+        maxTokens: 2500,
+      }),
+    retry,
+  );
+  const elapsedMs = performance.now() - t0;
+  console.log(
+    `[url-analyzer] parse returned in ${elapsedMs.toFixed(0)}ms, ` +
+    `tokens=${r.usage.inputTokens}/${r.usage.outputTokens}, credits=${r.creditsCharged}`,
+  );
+
+  const parsed = parseLlmJson(r.content);
   return {
-    urlsFetched: r.urlsFetched,
-    citations: r.citations.map((c) => ({ url: c.url, citedText: c.citedText })),
-    creditsSpent: r.creditsCharged,
-    webFetchInvocations: r.usage.webFetchInvocations,
+    business: parsed.business,
+    formulaire: parsed.formulaire,
+    ui: parsed.ui,
+    logoUrl: parsed.logoUrl,
+    llmCreditsSpent: r.creditsCharged,
+    inputTokens: r.usage.inputTokens,
+    outputTokens: r.usage.outputTokens,
     elapsedMs,
+    urlsFetched: snapshot.urlsFetched,
+    citations: [],
+    creditsSpent: r.creditsCharged,
+    webFetchInvocations: 0,
     rawContent: r.content,
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/*  System prompts (one per concern, deliberately small)                      */
-/* -------------------------------------------------------------------------- */
-
-const BUSINESS_SYSTEM_PROMPT = [
-  "Tu es un assistant de brand-research.",
-  "",
-  "On va te donner UN URL. Ta mission UNIQUE :",
-  "  1. Fetche cette page (et au plus 1 sous-page utile : /about,",
-  "     /a-propos, /qui-sommes-nous) pour comprendre l'entreprise.",
-  "  2. Rédige UN paragraphe de 6 à 10 phrases EN FRANÇAIS qui",
-  "     décrit : ce que fait l'entreprise, son audience cible, son",
-  "     ton (sérieux / playful / luxueux / industriel / technique /",
-  "     accessible), et l'ambiance générale de la marque.",
-  "",
-  "Le paragraphe NE DOIT PAS contenir :",
-  "  - d'instructions de cadrage ou de composition (centred, square,",
-  "    halo, framing, crop) — gérées par un système séparé en aval.",
-  "  - de mention du chest / sternum / pectoral / breastplate / torse —",
-  "    un logo y sera composé en aval, toute description du torse",
-  "    interférerait avec ce processus.",
-  "",
-  "Réponds UNIQUEMENT avec le paragraphe descriptif, pas",
-  "d'introduction, pas de markdown, pas de bullet points. Du texte",
-  "brut prêt à être collé dans un textarea.",
-].join("\n");
-
-const FORMULAIRE_SYSTEM_PROMPT = [
-  "Tu es un assistant qui extrait les FORMULAIRES présents sur un",
-  "site web.",
-  "",
-  "On va te donner UN URL. Ta mission UNIQUE :",
-  "  1. Fetche cette page (et 1 à 2 sous-pages susceptibles d'avoir",
-  "     un formulaire : /contact, /signup, /demo, /quote, /pricing,",
-  "     /reservation, /book, /devis…).",
-  "  2. Repère TOUS les formulaires visibles, et liste leurs champs.",
-  "",
-  "Réponds UNIQUEMENT avec un objet JSON, sans markdown, sans",
-  "backticks, sans commentaire. Schéma exact :",
-  "",
-  "{",
-  '  "forms": [',
-  "    {",
-  '      "name": "<slug court : signup | contact | newsletter | checkout | demo | quote | …>",',
-  '      "purpose": "<1 phrase : à quoi sert ce formulaire>",',
-  '      "fields": [',
-  "        {",
-  '          "name": "<nom programmatique snake_case ou camelCase>",',
-  '          "label": "<label humain tel que vu sur le site>",',
-  '          "type": "<text | email | tel | url | number | textarea | select | checkbox | radio | date>",',
-  '          "required": <true|false>,',
-  '          "options": ["…"],            // OBLIGATOIRE si type=select|radio, sinon omettre',
-  '          "placeholder": "…"            // optionnel',
-  "        }",
-  "      ]",
-  "    }",
-  "  ]",
-  "}",
-  "",
-  "RÈGLES :",
-  '- Si tu ne trouves AUCUN formulaire, renvoie {"forms": []}.',
-  "  Ne fabrique pas de form fictif.",
-  "- Liste les champs dans l'ordre où ils apparaissent.",
-  "- Si tu n'es pas sûr du label exact, mets ta meilleure",
-  "  approximation.",
-].join("\n");
-
-const UI_SYSTEM_PROMPT = [
-  "Tu es un assistant d'analyse UI / brand visual.",
-  "",
-  "On va te donner UN URL. Ta mission UNIQUE :",
-  "  1. Fetche la page d'accueil (sous-pages facultatives, max 1).",
-  "  2. Décris la DNA graphique du site.",
-  "",
-  "Réponds UNIQUEMENT avec un objet JSON, sans markdown, sans",
-  "backticks, sans commentaire. Schéma exact :",
-  "",
-  "{",
-  '  "primaryColor": "#rrggbb",            // couleur primaire de la marque (CTA principal)',
-  '  "secondaryColor": "#rrggbb",          // couleur secondaire / accent',
-  '  "backgroundColor": "#rrggbb",         // couleur dominante du fond de page',
-  '  "buttonStyle": "<1 à 2 phrases : forme (pill / arrondi / rectangulaire), bordure, ombre, hover, fill / outline>",',
-  '  "inputStyle": "<1 à 2 phrases : bordure, padding, fond, label position, états focus>",',
-  '  "visualBrief": "<paragraphe FR de 4 à 8 phrases : identité visuelle, palette, typographies, niveau de polish, esprit (minimal / éditorial / corporate / brutaliste / fun…), ambiance générale>"',
-  "}",
-  "",
-  "RÈGLES :",
-  "- TOUTES les couleurs au format #rrggbb (6 chars, lowercase).",
-  "- Si tu n'es pas sûr d'une teinte précise, donne ta meilleure",
-  "  approximation hex.",
-].join("\n");
-
-const LOGO_SYSTEM_PROMPT = [
-  "Tu es un assistant qui retrouve l'URL du LOGO d'un site web.",
-  "",
-  "On va te donner UN URL. Ta mission UNIQUE :",
-  "  1. Fetche cette page (pas de sous-page nécessaire).",
-  "  2. Identifie l'URL ABSOLUE de l'image principale du logo trouvée",
-  "     dans le header / nav. Si introuvable, fallback sur le favicon",
-  "     (icon link tag).",
-  "",
-  "Réponds UNIQUEMENT avec un objet JSON, pas de markdown :",
-  "",
-  "{",
-  '  "logoUrl": "<URL ABSOLUE https://…  ou chaîne vide si vraiment rien>"',
-  "}",
-  "",
-  "RÈGLES :",
-  "- logoUrl DOIT être une URL ABSOLUE (https://…). Si tu vois un src",
-  "  relatif (ex: /assets/logo.svg), construis l'URL absolue à partir",
-  '  de l\'origin du site donné.',
-  '- Si rien ne ressemble à un logo, renvoie une chaîne vide ("").',
-].join("\n");
-
-/* -------------------------------------------------------------------------- */
-/*  Public API — 4 small calls                                                */
-/* -------------------------------------------------------------------------- */
-
-/** Step 1 of 4 — paragraph describing the business. */
-export async function analyzeBusinessFromUrl(
+/**
+ * Full pipeline: extract → parse. Returns the `UrlAnalysis` shape
+ * downstream code (design-agent, image generation) consumes.
+ *
+ * Best-effort client-side fetch of the logo URL into a data: URI is
+ * provided for callers that need to embed the logo in downstream
+ * image-gen prompts.
+ */
+export async function analyzeUrl(
   sdk: AithosSDK,
   url: string,
-  retry: RetryOptions = {},
-): Promise<BusinessAnalysis> {
-  const trimmed = assertHttpUrl(url);
-  const invokeUrlFetch = getInvokeUrlFetch(sdk);
-
-  console.log("[url-analyzer] business call on", trimmed);
-  const t0 = performance.now();
-  const r = await withRetryOnRateLimit(
-    () =>
-      invokeUrlFetch({
-        prompt: `URL :\n${trimmed}\n\nFetche la page (et 1 sous-page about/à-propos si utile) puis rédige le paragraphe descriptif.`,
-        system: BUSINESS_SYSTEM_PROMPT,
-        model: "claude-sonnet-4-6",
-        maxTokens: 800,
-        maxFetches: 2,
-        maxContentTokens: 60_000,
-        citations: true,
-      }),
-    retry,
-  );
-  const elapsedMs = performance.now() - t0;
-  console.log(`[url-analyzer] business returned in ${elapsedMs.toFixed(0)}ms, credits=${r.creditsCharged}`);
-
-  return {
-    business: r.content.trim(),
-    ...metaFrom(r, elapsedMs),
-  };
-}
-
-/** Step 2 of 4 — JSON of detected forms. */
-export async function analyzeFormulaireFromUrl(
-  sdk: AithosSDK,
-  url: string,
-  retry: RetryOptions = {},
-): Promise<FormulaireAnalysis> {
-  const trimmed = assertHttpUrl(url);
-  const invokeUrlFetch = getInvokeUrlFetch(sdk);
-
-  console.log("[url-analyzer] formulaire call on", trimmed);
-  const t0 = performance.now();
-  const r = await withRetryOnRateLimit(
-    () =>
-      invokeUrlFetch({
-        prompt: `URL :\n${trimmed}\n\nFetche la page (et 1 à 2 sous-pages susceptibles d'avoir un formulaire) puis renvoie le JSON {forms: [...]}.`,
-        system: FORMULAIRE_SYSTEM_PROMPT,
-        model: "claude-sonnet-4-6",
-        maxTokens: 1500,
-        maxFetches: 3,
-        maxContentTokens: 80_000,
-        citations: false,
-      }),
-    retry,
-  );
-  const elapsedMs = performance.now() - t0;
-  console.log(`[url-analyzer] formulaire returned in ${elapsedMs.toFixed(0)}ms, credits=${r.creditsCharged}`);
-
-  const formulaire = parseFormulaire(parseJsonObject(r.content));
-  return {
-    formulaire,
-    ...metaFrom(r, elapsedMs),
-  };
-}
-
-/** Step 3 of 4 — graphic DNA of the site. */
-export async function analyzeUiFromUrl(
-  sdk: AithosSDK,
-  url: string,
-  retry: RetryOptions = {},
-): Promise<UiAnalysis> {
-  const trimmed = assertHttpUrl(url);
-  const invokeUrlFetch = getInvokeUrlFetch(sdk);
-
-  console.log("[url-analyzer] ui call on", trimmed);
-  const t0 = performance.now();
-  const r = await withRetryOnRateLimit(
-    () =>
-      invokeUrlFetch({
-        prompt: `URL :\n${trimmed}\n\nFetche la page d'accueil puis renvoie le JSON {primaryColor, secondaryColor, backgroundColor, buttonStyle, inputStyle, visualBrief}.`,
-        system: UI_SYSTEM_PROMPT,
-        model: "claude-sonnet-4-6",
-        maxTokens: 1200,
-        maxFetches: 2,
-        maxContentTokens: 60_000,
-        citations: false,
-      }),
-    retry,
-  );
-  const elapsedMs = performance.now() - t0;
-  console.log(`[url-analyzer] ui returned in ${elapsedMs.toFixed(0)}ms, credits=${r.creditsCharged}`);
-
-  const ui = parseUi(parseJsonObject(r.content));
-  return {
-    ui,
-    ...metaFrom(r, elapsedMs),
-  };
-}
-
-/** Step 4 of 4 — logo URL discovery + best-effort client-side fetch. */
-export async function extractLogoFromUrl(
-  sdk: AithosSDK,
-  url: string,
-  retry: RetryOptions = {},
-): Promise<LogoExtraction> {
-  const trimmed = assertHttpUrl(url);
-  const invokeUrlFetch = getInvokeUrlFetch(sdk);
-
-  console.log("[url-analyzer] logo call on", trimmed);
-  const t0 = performance.now();
-  const r = await withRetryOnRateLimit(
-    () =>
-      invokeUrlFetch({
-        prompt: `URL :\n${trimmed}\n\nFetche la page puis renvoie le JSON {logoUrl}.`,
-        system: LOGO_SYSTEM_PROMPT,
-        model: "claude-sonnet-4-6",
-        maxTokens: 400,
-        maxFetches: 1,
-        maxContentTokens: 40_000,
-        citations: false,
-      }),
-    retry,
-  );
-  const elapsedMs = performance.now() - t0;
-  console.log(`[url-analyzer] logo returned in ${elapsedMs.toFixed(0)}ms, credits=${r.creditsCharged}`);
-
-  const obj = parseJsonObject(r.content);
-  const logoUrl = typeof obj.logoUrl === "string" ? obj.logoUrl.trim() : "";
+): Promise<
+  UrlAnalysis & {
+    readonly stats: {
+      readonly extractMs: number;
+      readonly parseMs: number;
+      readonly totalMs: number;
+      readonly extractCredits: number;
+      readonly llmCredits: number;
+      readonly totalCredits: number;
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+    };
+  }
+> {
+  const tStart = performance.now();
+  const snapshot = await extractSnapshot(sdk, url);
+  const parsed = await parseSnapshot(sdk, snapshot);
 
   let logoDataUri = "";
   let logoFetchError = "";
-  if (logoUrl) {
+  if (parsed.logoUrl) {
     try {
-      logoDataUri = await fetchAsDataUri(logoUrl);
+      logoDataUri = await fetchAsDataUri(sdk, parsed.logoUrl);
     } catch (e) {
       logoFetchError = (e as Error).message;
       console.warn("[url-analyzer] logo fetch failed:", e);
     }
   }
 
+  const totalMs = performance.now() - tStart;
+
   return {
-    logoUrl,
+    business: parsed.business,
+    formulaire: parsed.formulaire,
+    ui: parsed.ui,
+    logoUrl: parsed.logoUrl,
     logoDataUri,
     logoFetchError,
-    ...metaFrom(r, elapsedMs),
-  };
-}
-
-/**
- * Run all four sub-analyses sequentially. Convenience wrapper for
- * callers that want a single call but accept the longer wall time.
- *
- * Adds a small inter-call delay to avoid the Anthropic per-minute rate
- * limit. Each sub-call retries with exponential backoff on rate-limit
- * errors (10s / 20s / 40s, max 3 retries).
- */
-export async function analyzeUrl(
-  sdk: AithosSDK,
-  url: string,
-): Promise<UrlAnalysis> {
-  const business = await analyzeBusinessFromUrl(sdk, url);
-  await sleep(3000);
-  const formulaire = await analyzeFormulaireFromUrl(sdk, url);
-  await sleep(3000);
-  const ui = await analyzeUiFromUrl(sdk, url);
-  await sleep(3000);
-  const logo = await extractLogoFromUrl(sdk, url);
-
-  return {
-    business: business.business,
-    formulaire: formulaire.formulaire,
-    ui: ui.ui,
-    logoUrl: logo.logoUrl,
-    logoDataUri: logo.logoDataUri,
-    logoFetchError: logo.logoFetchError,
-    creditsSpent:
-      business.creditsSpent + formulaire.creditsSpent + ui.creditsSpent + logo.creditsSpent,
-    webFetchInvocations:
-      business.webFetchInvocations +
-      formulaire.webFetchInvocations +
-      ui.webFetchInvocations +
-      logo.webFetchInvocations,
+    creditsSpent: snapshot.extractCreditsSpent + parsed.llmCreditsSpent,
+    webFetchInvocations: 0,
     urlsFetched: [
-      ...business.urlsFetched,
-      ...formulaire.urlsFetched,
-      ...ui.urlsFetched,
-      ...logo.urlsFetched,
+      snapshot.data.meta.title !== null
+        ? { url: snapshot.data.final_url, title: snapshot.data.meta.title }
+        : { url: snapshot.data.final_url },
     ],
-    citations: [
-      ...business.citations,
-      ...formulaire.citations,
-      ...ui.citations,
-      ...logo.citations,
-    ],
+    citations: [],
+    stats: {
+      extractMs: snapshot.elapsedMs,
+      parseMs: parsed.elapsedMs,
+      totalMs,
+      extractCredits: snapshot.extractCreditsSpent,
+      llmCredits: parsed.llmCreditsSpent,
+      totalCredits: snapshot.extractCreditsSpent + parsed.llmCreditsSpent,
+      inputTokens: parsed.inputTokens,
+      outputTokens: parsed.outputTokens,
+    },
   };
 }
 
 /* -------------------------------------------------------------------------- */
-/*  JSON parsing helpers                                                      */
+/*  Sub-step wrappers — drop-in for BrandedRobot.tsx                          */
+/*                                                                            */
+/*  Module-level cache keyed by URL so the four UI buttons (business,        */
+/*  formulaire, ui, logo) re-use one extraction and one parse.                */
+/* -------------------------------------------------------------------------- */
+
+const snapshotCache = new Map<string, Promise<AnalyzerSnapshot>>();
+const parsedCache = new Map<string, Promise<ParsedAnalysis>>();
+
+function getSnapshot(sdk: AithosSDK, url: string, retry: RetryOptions) {
+  const key = url.trim();
+  let p = snapshotCache.get(key);
+  if (!p) {
+    p = extractSnapshot(sdk, key, retry);
+    snapshotCache.set(key, p);
+  }
+  return p;
+}
+
+function getParsed(sdk: AithosSDK, url: string, retry: RetryOptions) {
+  const key = url.trim();
+  let p = parsedCache.get(key);
+  if (!p) {
+    p = (async () => parseSnapshot(sdk, await getSnapshot(sdk, key, retry), retry))();
+    parsedCache.set(key, p);
+  }
+  return p;
+}
+
+/** Clear the per-URL cache. Call when the user types a new URL. */
+export function resetAnalyzerCache(url?: string): void {
+  if (url === undefined) {
+    snapshotCache.clear();
+    parsedCache.clear();
+  } else {
+    snapshotCache.delete(url.trim());
+    parsedCache.delete(url.trim());
+  }
+}
+
+export async function analyzeBusinessFromUrl(
+  sdk: AithosSDK,
+  url: string,
+  retry: RetryOptions = {},
+): Promise<BusinessAnalysis> {
+  const parsed = await getParsed(sdk, url, retry);
+  return {
+    business: parsed.business,
+    elapsedMs: parsed.elapsedMs,
+    urlsFetched: parsed.urlsFetched,
+    citations: parsed.citations,
+    creditsSpent: parsed.creditsSpent,
+    webFetchInvocations: parsed.webFetchInvocations,
+    rawContent: parsed.rawContent,
+  };
+}
+
+export async function analyzeFormulaireFromUrl(
+  sdk: AithosSDK,
+  url: string,
+  retry: RetryOptions = {},
+): Promise<FormulaireAnalysis> {
+  const parsed = await getParsed(sdk, url, retry);
+  return {
+    formulaire: parsed.formulaire,
+    elapsedMs: parsed.elapsedMs,
+    urlsFetched: parsed.urlsFetched,
+    citations: parsed.citations,
+    creditsSpent: parsed.creditsSpent,
+    webFetchInvocations: parsed.webFetchInvocations,
+    rawContent: parsed.rawContent,
+  };
+}
+
+export async function analyzeUiFromUrl(
+  sdk: AithosSDK,
+  url: string,
+  retry: RetryOptions = {},
+): Promise<UiAnalysis> {
+  const parsed = await getParsed(sdk, url, retry);
+  return {
+    ui: parsed.ui,
+    elapsedMs: parsed.elapsedMs,
+    urlsFetched: parsed.urlsFetched,
+    citations: parsed.citations,
+    creditsSpent: parsed.creditsSpent,
+    webFetchInvocations: parsed.webFetchInvocations,
+    rawContent: parsed.rawContent,
+  };
+}
+
+export async function extractLogoFromUrl(
+  sdk: AithosSDK,
+  url: string,
+  retry: RetryOptions = {},
+): Promise<LogoExtraction> {
+  // The lambda resolves the best logo asset server-side as part of
+  // `aithos.web_extract` — apple-touch-icon, declared <link rel="icon">,
+  // conventional well-known paths. We just consume what it returns.
+  // No client-side CORS dance, no separate fetch.
+  //
+  // Both `getSnapshot` and `getParsed` are cached per-URL, so reading
+  // both here costs nothing extra when the user has already (or will
+  // later) run the other sub-steps (business / UI / formulaire).
+  //
+  // Backward-compat: an older deployed lambda predates the logo field.
+  // In that case `snapshot.data.logo` is undefined and we fall back to
+  // the legacy path (Sonnet-identified logoUrl + client-side
+  // fetchAsDataUri with CORS bypass).
+  const snapshot = await getSnapshot(sdk, url, retry);
+  const lambdaLogo = snapshot.data.logo;
+
+  if (lambdaLogo) {
+    const dataUri = `data:${lambdaLogo.content_type};base64,${lambdaLogo.base64}`;
+    let logoWidth = 0;
+    let logoHeight = 0;
+    try {
+      const dims = await probeDataUriDims(dataUri);
+      logoWidth = dims.width;
+      logoHeight = dims.height;
+    } catch {
+      // decode failure is non-fatal — caller still has the data URI
+    }
+    console.log(
+      `[url-analyzer] lambda-resolved logo: ${lambdaLogo.source}, ${lambdaLogo.size_bytes} bytes, ${logoWidth}×${logoHeight}`,
+    );
+    return {
+      logoUrl: lambdaLogo.url,
+      logoDataUri: dataUri,
+      logoFetchError: "",
+      logoSource: `lambda:${lambdaLogo.source}`,
+      logoWidth,
+      logoHeight,
+      // Logo is delivered as part of the existing 1mc snapshot — no
+      // extra LLM cost. We surface the snapshot's wall-time + meta so
+      // the UI can still attribute credits / elapsed properly.
+      elapsedMs: snapshot.elapsedMs,
+      urlsFetched: snapshot.urlsFetched,
+      citations: snapshot.citations,
+      creditsSpent: 0,
+      webFetchInvocations: 0,
+      rawContent: `[lambda-logo ${lambdaLogo.source} ${lambdaLogo.size_bytes}b]`,
+    };
+  }
+
+  // Either the deployed lambda predates the logo field OR it ran but
+  // didn't find any usable asset (`logo: null`). Fall back to the
+  // legacy behaviour: use the Sonnet-identified logoUrl + client-side
+  // fetch with CORS bypass.
+  console.log(
+    "[url-analyzer] lambda did not provide a logo; falling back to Sonnet-identified logoUrl + client fetch",
+  );
+  const parsed = await getParsed(sdk, url, retry);
+  let logoDataUri = "";
+  let logoFetchError = "";
+  let logoWidth = 0;
+  let logoHeight = 0;
+  if (parsed.logoUrl) {
+    try {
+      logoDataUri = await fetchAsDataUri(sdk, parsed.logoUrl);
+      try {
+        const dims = await probeDataUriDims(logoDataUri);
+        logoWidth = dims.width;
+        logoHeight = dims.height;
+      } catch {
+        // dimensions are nice-to-have, not fatal
+      }
+    } catch (e) {
+      logoFetchError = (e as Error).message;
+    }
+  }
+  return {
+    logoUrl: parsed.logoUrl,
+    logoDataUri,
+    logoFetchError,
+    logoSource: parsed.logoUrl ? "sonnet" : null,
+    logoWidth,
+    logoHeight,
+    elapsedMs: parsed.elapsedMs,
+    urlsFetched: parsed.urlsFetched,
+    citations: parsed.citations,
+    creditsSpent: parsed.creditsSpent,
+    webFetchInvocations: parsed.webFetchInvocations,
+    rawContent: parsed.rawContent,
+  };
+}
+
+function probeDataUriDims(
+  dataUri: string,
+): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => reject(new Error("image decode failed"));
+    img.src = dataUri;
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  JSON parsing                                                              */
 /* -------------------------------------------------------------------------- */
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
-function parseJsonObject(content: string): Record<string, unknown> {
+interface LlmParsed {
+  business: string;
+  formulaire: FormulaireSchema;
+  ui: UiDescriptor;
+  logoUrl: string;
+}
+
+function parseLlmJson(content: string): LlmParsed {
   let text = content.trim();
   text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end < start) {
     throw new Error(
-      `Sonnet returned non-JSON content (first 200 chars): ${content.slice(0, 200)}`,
+      `LLM returned non-JSON content (first 200 chars): ${content.slice(0, 200)}`,
     );
   }
-  const json = text.slice(start, end + 1);
-  let obj: unknown;
-  try {
-    obj = JSON.parse(json);
-  } catch (e) {
-    throw new Error(
-      `Sonnet returned malformed JSON: ${(e as Error).message}. Content: ${json.slice(0, 200)}`,
-    );
+  const obj = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+
+  const business = typeof obj.business === "string" ? obj.business.trim() : "";
+  if (!business) {
+    throw new Error("LLM JSON: business missing or empty");
   }
-  if (!obj || typeof obj !== "object") {
-    throw new Error("Sonnet JSON is not an object");
-  }
-  return obj as Record<string, unknown>;
+  const formulaire = parseFormulaire(obj.formulaire);
+  const ui = parseUi(obj.ui);
+  const logoUrl = typeof obj.logoUrl === "string" ? obj.logoUrl.trim() : "";
+  return { business, formulaire, ui, logoUrl };
 }
 
-function parseFormulaire(raw: Record<string, unknown>): FormulaireSchema {
-  const formsRaw = raw.forms;
-  if (!Array.isArray(formsRaw)) {
-    return { forms: [] };
-  }
+function parseFormulaire(raw: unknown): FormulaireSchema {
+  if (!raw || typeof raw !== "object") return { forms: [] };
+  const formsRaw = (raw as { forms?: unknown }).forms;
+  if (!Array.isArray(formsRaw)) return { forms: [] };
   const forms: DetectedForm[] = [];
   for (const fr of formsRaw) {
     if (!fr || typeof fr !== "object") continue;
-    const form = fr as Record<string, unknown>;
-    const name = typeof form.name === "string" ? form.name : "form";
-    const purpose = typeof form.purpose === "string" ? form.purpose : "";
-    const fieldsRaw = Array.isArray(form.fields) ? form.fields : [];
+    const f = fr as Record<string, unknown>;
+    const name = typeof f.name === "string" ? f.name : "form";
+    const purpose = typeof f.purpose === "string" ? f.purpose : "";
+    const fieldsRaw = Array.isArray(f.fields) ? f.fields : [];
     const fields: FormField[] = [];
     for (const fld of fieldsRaw) {
       if (!fld || typeof fld !== "object") continue;
       const ff = fld as Record<string, unknown>;
-      const fieldName = typeof ff.name === "string" ? ff.name : "field";
-      const label = typeof ff.label === "string" ? ff.label : fieldName;
-      const type = typeof ff.type === "string" ? ff.type : "text";
-      const required = ff.required === true;
-      const optionsRaw = Array.isArray(ff.options) ? ff.options : null;
-      const placeholderRaw = typeof ff.placeholder === "string" ? ff.placeholder : "";
-      const fieldOut: FormField = {
-        name: fieldName,
-        label,
-        type,
-        required,
-        ...(optionsRaw
-          ? { options: optionsRaw.filter((o): o is string => typeof o === "string") }
+      const opts = Array.isArray(ff.options) ? ff.options : null;
+      fields.push({
+        name: typeof ff.name === "string" ? ff.name : "field",
+        label: typeof ff.label === "string" ? ff.label : "",
+        type: typeof ff.type === "string" ? ff.type : "text",
+        required: ff.required === true,
+        ...(opts
+          ? { options: opts.filter((o): o is string => typeof o === "string") }
           : {}),
-        ...(placeholderRaw ? { placeholder: placeholderRaw } : {}),
-      };
-      fields.push(fieldOut);
+        ...(typeof ff.placeholder === "string"
+          ? { placeholder: ff.placeholder }
+          : {}),
+      });
     }
     forms.push({ name, purpose, fields });
   }
   return { forms };
 }
 
-function parseUi(raw: Record<string, unknown>): UiDescriptor {
-  for (const key of ["primaryColor", "secondaryColor", "backgroundColor"] as const) {
-    const v = raw[key];
+function parseUi(raw: unknown): UiDescriptor {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("LLM JSON: ui missing or not an object");
+  }
+  const r = raw as Record<string, unknown>;
+  for (const k of ["primaryColor", "secondaryColor", "backgroundColor"] as const) {
+    const v = r[k];
     if (typeof v !== "string" || !HEX_RE.test(v)) {
       throw new Error(
-        `Sonnet JSON: ${key} missing or not a valid #rrggbb hex (got ${JSON.stringify(v)})`,
+        `LLM JSON: ui.${k} missing or not a valid #rrggbb hex (got ${JSON.stringify(v)})`,
       );
     }
   }
-  const buttonStyle = typeof raw.buttonStyle === "string" ? raw.buttonStyle.trim() : "";
-  const inputStyle = typeof raw.inputStyle === "string" ? raw.inputStyle.trim() : "";
-  const visualBrief = typeof raw.visualBrief === "string" ? raw.visualBrief.trim() : "";
-  if (visualBrief.length === 0) {
-    throw new Error("Sonnet JSON: visualBrief missing or empty");
-  }
+  const visualBrief = typeof r.visualBrief === "string" ? r.visualBrief.trim() : "";
+  if (!visualBrief) throw new Error("LLM JSON: ui.visualBrief missing or empty");
   return {
-    primaryColor: (raw.primaryColor as string).toLowerCase() as HexColor,
-    secondaryColor: (raw.secondaryColor as string).toLowerCase() as HexColor,
-    backgroundColor: (raw.backgroundColor as string).toLowerCase() as HexColor,
-    buttonStyle,
-    inputStyle,
+    primaryColor: (r.primaryColor as string).toLowerCase() as HexColor,
+    secondaryColor: (r.secondaryColor as string).toLowerCase() as HexColor,
+    backgroundColor: (r.backgroundColor as string).toLowerCase() as HexColor,
+    buttonStyle: typeof r.buttonStyle === "string" ? r.buttonStyle.trim() : "",
+    inputStyle: typeof r.inputStyle === "string" ? r.inputStyle.trim() : "",
     visualBrief,
   };
 }
@@ -681,22 +876,55 @@ function parseUi(raw: Record<string, unknown>): UiDescriptor {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Best-effort client-side fetch of an absolute URL → base64 data URI.
- * Throws on network / CORS errors so the caller can surface a hint.
+ * Best-effort fetch of an absolute URL → base64 data URI. Three
+ * strategies in order:
+ *
+ *   1. `fetch(url, {mode:"cors"})` + blob — cheapest; succeeds when
+ *      the server returns `Access-Control-Allow-Origin: *`. Rare in
+ *      production.
+ *   2. `<img crossOrigin="anonymous">` + canvas readback — succeeds
+ *      when the IMG GET returns CORS headers (common for CDN-hosted
+ *      logos: jsdelivr, jimcdn, cloudfront).
+ *   3. Server-side proxy via `aithos.web_fetch_asset` on the
+ *      web-extractor lambda. Costs 1 mc; bypasses CORS by fetching
+ *      the asset from the server. Last resort.
  */
-async function fetchAsDataUri(url: string): Promise<string> {
+export async function fetchAsDataUri(sdk: AithosSDK, url: string): Promise<string> {
   if (!/^https?:\/\//i.test(url)) {
     throw new Error(`logoUrl is not an absolute http(s) URL: ${url}`);
   }
-  const res = await fetch(url, { mode: "cors" });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} fetching ${url}`);
+  // Strategy 1 — fetch + blob
+  try {
+    const res = await fetch(url, { mode: "cors" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (!blob.type.startsWith("image/")) {
+      throw new Error(`not an image (got ${blob.type})`);
+    }
+    return await blobToDataUri(blob);
+  } catch (e1) {
+    console.warn(
+      `[url-analyzer] fetch CORS failed for ${url}: ${(e1 as Error).message}. trying <img> + canvas.`,
+    );
   }
-  const blob = await res.blob();
-  if (!blob.type.startsWith("image/")) {
-    throw new Error(`fetched resource is not an image (got ${blob.type})`);
+  // Strategy 2 — <img crossOrigin> + canvas
+  try {
+    return await imgElementToDataUri(url);
+  } catch (e2) {
+    console.warn(
+      `[url-analyzer] <img> + canvas failed for ${url}: ${(e2 as Error).message}. trying server-side proxy.`,
+    );
   }
-  return await new Promise<string>((resolve, reject) => {
+  // Strategy 3 — server-side proxy via aithos.web_fetch_asset
+  const r = await sdk.web.fetchAsset({ url });
+  console.log(
+    `[url-analyzer] server-side fetch OK: ${r.data.size_bytes} bytes, ${r.data.content_type}, ${r.creditsCharged} mc`,
+  );
+  return `data:${r.data.content_type};base64,${r.data.base64}`;
+}
+
+function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") resolve(reader.result);
@@ -704,5 +932,33 @@ async function fetchAsDataUri(url: string): Promise<string> {
     };
     reader.onerror = () => reject(new Error("FileReader error"));
     reader.readAsDataURL(blob);
+  });
+}
+
+function imgElementToDataUri(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        if (w === 0 || h === 0) throw new Error("zero-dimension image");
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("no canvas 2d context");
+        ctx.drawImage(img, 0, 0);
+        // toDataURL throws SecurityError if the canvas is tainted
+        // (server didn't send CORS headers on the IMG GET).
+        resolve(canvas.toDataURL("image/png"));
+      } catch (e) {
+        reject(new Error(`canvas readback failed: ${(e as Error).message}`));
+      }
+    };
+    img.onerror = () => reject(new Error("img load failed (probably CORS or network)"));
+    img.src = url;
   });
 }

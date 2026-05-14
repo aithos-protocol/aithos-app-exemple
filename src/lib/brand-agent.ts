@@ -30,6 +30,10 @@ import {
   type SilhouetteBox,
 } from "./image-pipeline.js";
 import {
+  extractLogoSymbol,
+  type LogoExtractResult,
+} from "./logo-extractor.js";
+import {
   detectTorsoByPose,
   renderPoseOverlay,
   type PoseTorsoResult,
@@ -116,6 +120,13 @@ export const COMPOSITION_TEMPLATE = [
   "  * 'arms-in-action': both arms FULLY VISIBLE inside the frame, performing",
   "    a small contained action — holding a tool, presenting an object, etc.",
   "    Hands and forearms stay INSIDE the frame.",
+  "    CRITICAL — the action ALWAYS happens BELOW THE CHEST: hands, forearms,",
+  "    held objects and any gesture are positioned at lower-abdomen / navel",
+  "    height or lower, NEVER raised in front of the chest. The pectoral",
+  "    panel between the two armpits remains 100% visible and unobstructed —",
+  "    no hand, no finger, no arm, no held object, no cast shadow ever",
+  "    crosses, covers or hovers in front of this area. The forearms angle",
+  "    INWARD AND DOWNWARD toward the centre-bottom of the bust, not upward.",
   "  * 'arms-cut': arms cut at the FOREARM — upper arms and elbows visible,",
   "    lower forearms and hands exit the frame cleanly at the bottom-left",
   "    and bottom-right edges.",
@@ -169,6 +180,13 @@ export const COMPOSITION_TEMPLATE = [
   "  PIECES JOINED IN THE MIDDLE — it is ONE PIECE.",
   "- ZERO printed text or letterforms. ZERO numerical markings.",
   "- ZERO decorative shading meant to suggest a chest plate or armor.",
+  "- ZERO OCCLUSION OF THE CHEST. No hand, no finger, no arm, no forearm,",
+  "  no elbow, no held object (key, tool, item, etc.), and no cast shadow",
+  "  may cross IN FRONT OF, cover, overlap or hover over the pectoral panel",
+  "  between the two armpits. The chest surface is entirely unobstructed",
+  "  from armpit to armpit and from the collarbone down to the lower ribs.",
+  "  If the robot is holding something, the hands and the object stay at",
+  "  lower-abdomen / navel height or below — NEVER raised onto the chest.",
   "",
   "MENTAL MODEL — when generating this image, imagine an illustrator who",
   "drew the robot with a perfectly clean chest, then a brand designer who",
@@ -189,6 +207,12 @@ export const COMPOSITION_TEMPLATE = [
   "  so the robot can be placed on any page colour. Any halo, gradient or",
   "  glow would prevent that step from working cleanly.",
   "",
+  "DEMEANOR (kept identical across all brand mascots):",
+  "- ALWAYS friendly, warm, visibly trustworthy — a reassuring helper a",
+  "  human would feel safe asking for guidance, whatever the brand's",
+  "  sector. Kind eyes, gentle expression, relaxed open posture. No stern,",
+  "  cold, intimidating or menacing variant exists.",
+  "",
   "STYLE:",
   "- Clean modern flat 2D illustration with subtle cel shading.",
   "- NOT photorealistic, NOT 3D rendered, NOT industrial steampunk, NOT metallic photoreal.",
@@ -207,18 +231,46 @@ export const COMPOSITION_TEMPLATE = [
  * brand-customised — it's the contract that keeps the library
  * visually consistent.
  */
+/**
+ * Server-side cap on `params.prompt` for image generation (compute
+ * proxy `aithos.compute_invoke_image`). Trying to send more raises
+ * `-32602: params.prompt is too long (max 8000 chars)`.
+ */
+const IMAGE_PROMPT_MAX_CHARS = 8000;
+
 export function composeFluxPrompt(brand: BrandProfile): string {
   const bgRgb = hexToRgb(brand.backgroundColor);
   const primaryRgb = hexToRgb(brand.primaryColor);
-  return [
-    brand.visualBrief,
-    "",
+
+  // The composition template + color palette are the non-negotiable
+  // visual instructions — they must reach the model verbatim or the
+  // robot loses anatomy / chest centering. The visualBrief is
+  // free-form descriptive prose: it's the only part we can compress
+  // when the total bumps over the 8000-char server cap.
+  const fixedTail = [
     COMPOSITION_TEMPLATE,
     "",
     "COLOR PALETTE:",
     `- Primary brand colour (eye glow + small accents): ${brand.primaryColor} rgb(${primaryRgb.r},${primaryRgb.g},${primaryRgb.b}).`,
     `- Background: ${brand.backgroundColor} rgb(${bgRgb.r},${bgRgb.g},${bgRgb.b}).`,
   ].join("\n");
+
+  // Budget for the brief: total cap minus fixed tail minus 2 newlines
+  // joining brief+tail, with a small margin so a stray newline edit
+  // never pushes us back over.
+  const briefBudget = IMAGE_PROMPT_MAX_CHARS - fixedTail.length - 4 /*"\n\n"*/ - 64;
+  const briefRaw = brand.visualBrief.trim();
+  const brief =
+    briefRaw.length > briefBudget
+      ? briefRaw.slice(0, Math.max(briefBudget - 1, 0)) + "…"
+      : briefRaw;
+  if (briefRaw.length > briefBudget) {
+    console.warn(
+      `[brand-agent] visualBrief truncated ${briefRaw.length} → ${brief.length} chars to fit the 8000-char image-prompt cap.`,
+    );
+  }
+
+  return [brief, "", fixedTail].join("\n");
 }
 
 
@@ -620,11 +672,18 @@ export async function step2DetectTorso(
 /* -------------------------------------------------------------------------- */
 
 export interface Step3LogoArgs {
+  readonly sdk: AithosSDK;
   readonly brand: BrandProfile;
+  /**
+   * Force the lockup extractor to call Sonnet even when the
+   * aspect-ratio gate would skip it. Default: false. Useful for
+   * stacked lockups that happen to land in the square gate.
+   */
+  readonly forceLockupExtraction?: boolean;
 }
 
 export interface Step3LogoResult {
-  /** Original logo as data URI. */
+  /** Original logo as data URI (as fed by the operator / scraped). */
   readonly originalDataUri: string;
   /** Processed logo with guaranteed transparency. */
   readonly processedImg: HTMLImageElement;
@@ -633,11 +692,34 @@ export interface Step3LogoResult {
   readonly bgWasRemoved: boolean;
   /** The detected corner colour (for trace). */
   readonly detectedCornerHex: string | null;
+  /**
+   * Result of the lockup-extraction sub-step. Surfaces the layout
+   * Sonnet (or the gate) picked, the bbox when cropped, and the
+   * credits spent — handy for the debug UI.
+   */
+  readonly extraction: LogoExtractResult;
 }
 
 export async function step3PrepareLogo(args: Step3LogoArgs): Promise<Step3LogoResult> {
-  const { brand } = args;
-  const originalImg = await loadImage(brand.logoDataUri);
+  const { sdk, brand, forceLockupExtraction = false } = args;
+
+  // Sub-step 3a — Lockup extraction. If the brand's logo is a graphic
+  // mark + wordmark lockup (e.g., "<icon> WebGuard Agency"), crop it
+  // to the mark alone before any background-removal work. Cheap
+  // aspect-ratio gate skips Sonnet for square-ish logos.
+  //
+  // The extractor preserves the original logo's bg semantics — if the
+  // input had transparency, the cropped output has transparency; if
+  // the input had a solid bg colour, the extractor paints that colour
+  // across the padding so the legacy corner-flood-fill below keeps
+  // working unchanged.
+  const extraction = await extractLogoSymbol({
+    sdk,
+    logoDataUri: brand.logoDataUri,
+    force: forceLockupExtraction,
+  });
+  const sourceDataUri = extraction.dataUri;
+  const originalImg = await loadImage(sourceDataUri);
 
   if (brand.logoHasAlpha) {
     // No background to remove — pass through. Still re-encode as PNG
@@ -651,6 +733,7 @@ export async function step3PrepareLogo(args: Step3LogoArgs): Promise<Step3LogoRe
       processedDataUri,
       bgWasRemoved: false,
       detectedCornerHex: null,
+      extraction,
     };
   }
 
@@ -670,6 +753,7 @@ export async function step3PrepareLogo(args: Step3LogoArgs): Promise<Step3LogoRe
     processedDataUri,
     bgWasRemoved: true,
     detectedCornerHex: cornerHex,
+    extraction,
   };
 }
 

@@ -74,6 +74,7 @@ import {
   analyzeUiFromUrl,
   delay,
   extractLogoFromUrl,
+  resetAnalyzerCache,
   type BusinessAnalysis,
   type FormulaireAnalysis,
   type FormulaireSchema,
@@ -81,6 +82,14 @@ import {
   type RetryProgress,
   type UiAnalysis,
 } from "../lib/url-analyzer.js";
+import {
+  generateRobotImagePrompt,
+  type ImagePromptResult,
+} from "../lib/image-prompt-agent.js";
+import {
+  generateAgentSiteHtml,
+  type SiteBuilderResult,
+} from "../lib/site-builder-agent.js";
 import {
   applyTreatmentToLogo,
   judgeCompositeHarmony,
@@ -262,6 +271,9 @@ export function BrandedRobot() {
   const { sdk, state } = useSdk();
 
   // --- URL analyzer state (4 independent sub-steps) ---
+  // All four sub-steps share a single web.extract + single Sonnet
+  // parse call through a per-URL module-level cache in url-analyzer.ts.
+  // Clicking three buttons sequentially still costs ~1 extract + 1 LLM.
   const [urlInput, setUrlInput] = useState<string>("");
   const [businessStep, setBusinessStep] = useState<UrlSubStepState<BusinessAnalysis>>({ status: "idle" });
   const [formulaireStep, setFormulaireStep] = useState<UrlSubStepState<FormulaireAnalysis>>({ status: "idle" });
@@ -297,6 +309,21 @@ export function BrandedRobot() {
   const [agentError, setAgentError] = useState<string | null>(null);
   const [agentSystemPrompt, setAgentSystemPrompt] = useState<string>("");
   const [agentPromptEdited, setAgentPromptEdited] = useState(false);
+
+  // --- Image-prompt agent state (Step 0 — Opus composes the FLUX prompt) ---
+  const [imagePromptRunning, setImagePromptRunning] = useState(false);
+  const [imagePromptError, setImagePromptError] = useState<string | null>(null);
+  const [imagePromptResult, setImagePromptResult] =
+    useState<ImagePromptResult | null>(null);
+  const [imagePrompt, setImagePrompt] = useState<string>("");
+  const [imagePromptEdited, setImagePromptEdited] = useState(false);
+
+  // --- Site builder state (Step 6 — Opus composes the brand copy, client
+  //     substitutes into agent-template.html, then download). ---
+  const [siteBuilderRunning, setSiteBuilderRunning] = useState(false);
+  const [siteBuilderError, setSiteBuilderError] = useState<string | null>(null);
+  const [siteBuilderResult, setSiteBuilderResult] =
+    useState<SiteBuilderResult | null>(null);
 
   // --- Step 1 (generate) state ---
   const [generated, setGenerated] = useState<Step1Result | null>(null);
@@ -591,6 +618,49 @@ export function BrandedRobot() {
     }
   };
 
+  /**
+   * Step 0 — call Opus to compose the FLUX/Imagen prompt from
+   * business + ui + formulaire. The result is shown editable in a
+   * textarea; Step 1 then sends it verbatim as promptOverride.
+   *
+   * Requires Business + UI to be populated first; Formulaire is
+   * optional (we send an empty {forms:[]} when missing).
+   */
+  const runBuildImagePrompt = async () => {
+    if (business.trim().length === 0) {
+      setImagePromptError("Business is empty — run the URL analyzer first.");
+      return;
+    }
+    if (uiVisualBrief.trim().length === 0) {
+      setImagePromptError("UI visual brief is empty — run the URL analyzer first.");
+      return;
+    }
+    setImagePromptRunning(true);
+    setImagePromptError(null);
+    try {
+      const r = await generateRobotImagePrompt({
+        sdk,
+        business,
+        ui: {
+          primaryColor,
+          secondaryColor,
+          backgroundColor,
+          buttonStyle,
+          inputStyle,
+          visualBrief: uiVisualBrief,
+        },
+        formulaire: formulaire ?? { forms: [] },
+      });
+      setImagePromptResult(r);
+      setImagePrompt(r.fullPrompt);
+      setImagePromptEdited(false);
+    } catch (e) {
+      setImagePromptError(formatError(e));
+    } finally {
+      setImagePromptRunning(false);
+    }
+  };
+
   const runStep1Generate = async () => {
     setGenerating(true);
     setStep1Error(null);
@@ -601,6 +671,11 @@ export function BrandedRobot() {
         buttonStyle,
         inputStyle,
       });
+      // If the operator has built (and possibly edited) a custom prompt
+      // via the Opus image-prompt agent, send that VERBATIM as the
+      // override. Otherwise fall back to composeFluxPrompt (built from
+      // the brand profile inside step1GenerateRobot).
+      const promptOverride = imagePrompt.trim().length > 0 ? imagePrompt : undefined;
       const r = await step1GenerateRobot({
         brand: buildAdHocBrand({
           visualBrief,
@@ -611,6 +686,7 @@ export function BrandedRobot() {
         }),
         sdk,
         model: modelId,
+        ...(promptOverride ? { promptOverride } : {}),
       });
       setGenerated(r);
     } catch (e) {
@@ -694,6 +770,7 @@ export function BrandedRobot() {
     setStep4Result(null);
     try {
       const r = await step3PrepareLogo({
+        sdk,
         brand: buildAdHocBrand({
           visualBrief: uiVisualBrief,
           primaryColor,
@@ -725,6 +802,69 @@ export function BrandedRobot() {
       setJudgeError(formatError(e));
     } finally {
       setJudgeRunning(false);
+    }
+  };
+
+  /**
+   * Step 6 — build a single-file static HTML demo of the branded
+   * agent (template + Opus copy + extracted UI palette + composited
+   * robot + logo). Requires the v17 url-analyzer outputs, a generated
+   * robot (with optional logo composite if Sonnet approved it), and
+   * a logo data URI in the Logo section.
+   */
+  const runBuildSite = async () => {
+    if (!generated) {
+      setSiteBuilderError("Generate the robot first (Step 1).");
+      return;
+    }
+    if (!logo) {
+      setSiteBuilderError("Upload a logo or run the Logo sub-step first.");
+      return;
+    }
+    if (business.trim().length === 0) {
+      setSiteBuilderError("Business is empty — run the URL analyzer first.");
+      return;
+    }
+    if (urlInput.trim().length === 0) {
+      setSiteBuilderError("URL field is empty — paste the target site URL.");
+      return;
+    }
+    // Final robot uri — prefer the composited image (logo on chest)
+    // if Sonnet approved it OR no judgement happened yet. Otherwise
+    // fall back to the bare bg-stripped robot.
+    const useComposite =
+      step4Result !== null &&
+      (judgment === null || judgment.verdict === "harmonious");
+    const robotDataUri = useComposite
+      ? step4Result!.dataUri
+      : step1_5Result
+        ? step1_5Result.processedDataUri
+        : generated.rawDataUri;
+
+    setSiteBuilderRunning(true);
+    setSiteBuilderError(null);
+    try {
+      const r = await generateAgentSiteHtml({
+        sdk,
+        business,
+        ui: {
+          primaryColor,
+          secondaryColor,
+          backgroundColor,
+          buttonStyle,
+          inputStyle,
+          visualBrief: uiVisualBrief,
+        },
+        formulaire: formulaire ?? { forms: [] },
+        siteUrl: urlInput.trim(),
+        robotDataUri,
+        logoDataUri: logo.dataUri,
+      });
+      setSiteBuilderResult(r);
+    } catch (e) {
+      setSiteBuilderError(formatError(e));
+    } finally {
+      setSiteBuilderRunning(false);
     }
   };
 
@@ -798,16 +938,19 @@ export function BrandedRobot() {
       <section style={stepStyle}>
         <h3>Optional — Analyse from URL (4 sub-steps)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          v16 — the analysis is split into 4 small, independent calls so
-          a single timeout doesn't kill everything. Run them one by one
-          (the buttons below) or fire them all sequentially with{" "}
-          <em>Run all</em>. Each one auto-fills its destination section.
+          Single deterministic <code>web.extract</code> call (~1 mc,
+          ~5-15 s) + 1 Sonnet parse pass. The four sub-step buttons share
+          the same snapshot, so the 2nd/3rd/4th button after the first
+          one is instant.
         </p>
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <input
             type="url"
             value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
+            onChange={(e) => {
+              setUrlInput(e.target.value);
+              resetAnalyzerCache();
+            }}
             placeholder="https://example.com"
             spellCheck={false}
             style={{
@@ -1209,11 +1352,97 @@ export function BrandedRobot() {
 
       {/* ===================== Step 1 — Generate ===================== */}
       <section style={stepStyle}>
-        <h3>Step 1 — Generate robot image</h3>
+        <h3>Step 0 — Build image prompt (Opus)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Sends the <em>UI</em> visual brief (+ button/input style hints)
-          + locked composition template + UI palette to the selected
+          Opus 4.6 composes the FLUX/Imagen prompt from your{" "}
+          <em>Business</em> description, <em>UI</em> palette + style
+          hints, and the detected <em>Formulaire</em>. The locked
+          composition template + colour palette are appended
+          automatically. Edit freely before Step 1 sends it to the
           image model.
+        </p>
+
+        <div className="row" style={{ gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => void runBuildImagePrompt()}
+            disabled={
+              imagePromptRunning ||
+              business.trim().length === 0 ||
+              uiVisualBrief.trim().length === 0
+            }
+          >
+            {imagePromptRunning
+              ? "Composing prompt…"
+              : imagePromptResult
+                ? "Re-compose prompt (Opus)"
+                : "Compose prompt (Opus)"}
+          </button>
+          {imagePromptResult && (
+            <span style={{ fontSize: "0.75em", color: "#666" }}>
+              {imagePromptResult.creditsSpent.toLocaleString()} mc · {imagePromptResult.elapsedMs.toFixed(0)}ms ·
+              brief {imagePromptResult.creativeBrief.length} chars ·
+              full {imagePrompt.length}/8000 chars
+              {imagePromptResult.briefTruncated ? " · brief truncated" : ""}
+            </span>
+          )}
+        </div>
+
+        {imagePromptError && (
+          <div className="error" style={{ marginTop: 8 }}>{imagePromptError}</div>
+        )}
+
+        {imagePromptResult && (
+          <div style={{ marginTop: 10 }}>
+            <details style={{ marginBottom: 6 }}>
+              <summary style={{ fontSize: "0.85em", color: "#555", cursor: "pointer" }}>
+                Reasoning (why this design direction)
+              </summary>
+              <p style={{ fontSize: "0.85em", color: "#444", marginTop: 6 }}>
+                {imagePromptResult.reasoning}
+              </p>
+            </details>
+            <label style={{ display: "block" }}>
+              <span style={{ display: "block", fontSize: "0.85em", marginBottom: 4 }}>
+                Full image prompt (editable — sent verbatim to the image
+                model on Step 1){imagePromptEdited ? " — edited" : ""}
+              </span>
+              <textarea
+                value={imagePrompt}
+                onChange={(e) => {
+                  setImagePrompt(e.target.value);
+                  setImagePromptEdited(true);
+                }}
+                rows={14}
+                spellCheck={false}
+                style={{
+                  width: "100%",
+                  fontFamily: "ui-monospace, monospace",
+                  fontSize: "0.78em",
+                  padding: "6px 8px",
+                  border: "1px solid #ccc",
+                  borderRadius: 4,
+                  resize: "vertical",
+                }}
+              />
+            </label>
+          </div>
+        )}
+
+        <h3 style={{ marginTop: 28 }}>Step 1 — Generate robot image</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          Sends the{" "}
+          {imagePrompt.trim().length > 0 ? (
+            <>
+              <strong>edited image prompt above</strong> verbatim
+            </>
+          ) : (
+            <>
+              <em>UI</em> visual brief (+ button/input style hints)
+              + locked composition template + UI palette
+            </>
+          )}{" "}
+          to the selected image model.
         </p>
 
         <label style={{ display: "block", marginBottom: 8 }}>
@@ -1421,10 +1650,13 @@ export function BrandedRobot() {
 
       {/* ===================== Step 3 — Prepare logo ===================== */}
       <section style={stepStyle}>
-        <h3>Step 3 — Prepare logo (transparency)</h3>
+        <h3>Step 3 — Prepare logo (lockup extraction + transparency)</h3>
         <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
-          Removes the logo's solid background by flood-filling from the
-          4 corners. Skipped if the upload already has alpha.
+          Two sub-steps. 3a — if the logo is a mark + wordmark lockup
+          (e.g., "&lt;icon&gt; Brand Name"), Sonnet 4.6 (vision) detects
+          it and crops to the graphic mark alone. A cheap aspect-ratio
+          gate (ratio ∈ [0.71, 1.40]) skips the Sonnet call on square
+          logos. 3b — flood-fill removes the residual solid background.
         </p>
         <button
           type="button"
@@ -1440,28 +1672,83 @@ export function BrandedRobot() {
         )}
         {step3Error && <div className="error" style={{ marginTop: 8 }}>{step3Error}</div>}
         {step3Result && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-            <figure style={{ margin: 0 }}>
-              <figcaption style={figcapStyle}>Original</figcaption>
-              <img
-                src={step3Result.originalDataUri}
-                alt="original logo"
-                style={{ ...imgStyle, background: "#fff" }}
-              />
-            </figure>
-            <figure style={{ margin: 0 }}>
-              <figcaption style={figcapStyle}>
-                Processed{" "}
-                {step3Result.bgWasRemoved &&
-                  `(removed ${step3Result.detectedCornerHex})`}
-              </figcaption>
-              <img
-                src={step3Result.processedDataUri}
-                alt="processed logo"
-                style={{ ...imgStyle, ...checkerBgStyle }}
-              />
-            </figure>
-          </div>
+          <>
+            <div
+              style={{
+                marginTop: 12,
+                padding: "8px 10px",
+                background: "#f5f5f5",
+                borderRadius: 4,
+                fontSize: "0.85em",
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>3a — Lockup extraction:</strong>{" "}
+              <code>{step3Result.extraction.layout}</code>
+              {step3Result.extraction.cropped && step3Result.extraction.symbolBox && (
+                <>
+                  {" "}
+                  · cropped to bbox{" "}
+                  <code>
+                    {step3Result.extraction.symbolBox.x},
+                    {step3Result.extraction.symbolBox.y}{" "}
+                    {step3Result.extraction.symbolBox.w}×
+                    {step3Result.extraction.symbolBox.h}
+                  </code>
+                </>
+              )}{" "}
+              · confidence{" "}
+              <code>{step3Result.extraction.confidence.toFixed(2)}</code>
+              {" "}· credits{" "}
+              <code>{step3Result.extraction.creditsSpent}</code>
+              <div style={{ marginTop: 4, color: "#666" }}>
+                {step3Result.extraction.reasoning}
+              </div>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: step3Result.extraction.cropped
+                  ? "1fr 1fr 1fr"
+                  : "1fr 1fr",
+                gap: 12,
+                marginTop: 12,
+              }}
+            >
+              <figure style={{ margin: 0 }}>
+                <figcaption style={figcapStyle}>Original</figcaption>
+                <img
+                  src={step3Result.originalDataUri}
+                  alt="original logo"
+                  style={{ ...imgStyle, background: "#fff" }}
+                />
+              </figure>
+              {step3Result.extraction.cropped && (
+                <figure style={{ margin: 0 }}>
+                  <figcaption style={figcapStyle}>
+                    3a — Symbol crop
+                  </figcaption>
+                  <img
+                    src={step3Result.extraction.dataUri}
+                    alt="cropped symbol"
+                    style={{ ...imgStyle, background: "#fff" }}
+                  />
+                </figure>
+              )}
+              <figure style={{ margin: 0 }}>
+                <figcaption style={figcapStyle}>
+                  3b — Processed{" "}
+                  {step3Result.bgWasRemoved &&
+                    `(removed ${step3Result.detectedCornerHex})`}
+                </figcaption>
+                <img
+                  src={step3Result.processedDataUri}
+                  alt="processed logo"
+                  style={{ ...imgStyle, ...checkerBgStyle }}
+                />
+              </figure>
+            </div>
+          </>
         )}
       </section>
 
@@ -1685,8 +1972,130 @@ export function BrandedRobot() {
           })()}
         </section>
       )}
+
+      {/* ===================== Step 6 — Build static site ===================== */}
+      <section style={stepStyle}>
+        <h3>Step 6 — Build static site (Opus)</h3>
+        <p style={{ fontSize: "0.9em", color: "#555", marginTop: 0 }}>
+          Generates a single-file HTML demo of the branded agent: same
+          composition as <code>UI/agent.html</code>, but with the
+          extracted background colour, primary colour on the Send
+          button, the company logo in the menu (transparent), the
+          composited robot as the mascot, and Opus-tailored copy
+          (title, sub-title, intro message, replies) adapted to the
+          business. Self-contained — open it offline.
+        </p>
+        <button
+          type="button"
+          onClick={() => void runBuildSite()}
+          disabled={
+            siteBuilderRunning ||
+            !generated ||
+            !logo ||
+            business.trim().length === 0 ||
+            urlInput.trim().length === 0
+          }
+        >
+          {siteBuilderRunning
+            ? "Building…"
+            : siteBuilderResult
+              ? "Re-build site (Opus)"
+              : "Build static site (Opus)"}
+        </button>
+        {(!generated || !logo) && (
+          <em style={{ marginLeft: 8, color: "#888", fontSize: "0.85em" }}>
+            Need a generated robot (Step 1+) AND a logo loaded in the Logo
+            section.
+          </em>
+        )}
+        {siteBuilderError && (
+          <div className="error" style={{ marginTop: 8 }}>{siteBuilderError}</div>
+        )}
+
+        {siteBuilderResult && (
+          <div style={{ marginTop: 12 }}>
+            <div className="row" style={{ gap: 12, alignItems: "center", marginBottom: 10 }}>
+              <a
+                href={
+                  "data:text/html;charset=utf-8," +
+                  encodeURIComponent(siteBuilderResult.html)
+                }
+                download={`${slugify(siteBuilderResult.brandJson.brand)}-agent.html`}
+              >
+                Download HTML ({(siteBuilderResult.html.length / 1024).toFixed(0)} KB)
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  const blob = new Blob([siteBuilderResult.html], {
+                    type: "text/html;charset=utf-8",
+                  });
+                  const url = URL.createObjectURL(blob);
+                  window.open(url, "_blank", "noopener");
+                  // Free the URL after a moment — the new tab keeps its own ref.
+                  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                }}
+              >
+                Open in new tab
+              </button>
+              <span style={{ fontSize: "0.75em", color: "#666" }}>
+                {siteBuilderResult.creditsSpent.toLocaleString()} mc ·{" "}
+                {siteBuilderResult.elapsedMs.toFixed(0)}ms
+              </span>
+            </div>
+
+            <details>
+              <summary style={{ fontSize: "0.85em", color: "#555", cursor: "pointer" }}>
+                Opus brand JSON (title, brand, replies, …)
+              </summary>
+              <pre
+                style={{
+                  marginTop: 6,
+                  fontSize: "0.78em",
+                  background: "#f6f6f6",
+                  padding: "8px 12px",
+                  borderRadius: 4,
+                  overflow: "auto",
+                  maxHeight: 320,
+                }}
+              >
+                {JSON.stringify(siteBuilderResult.brandJson, null, 2)}
+              </pre>
+            </details>
+
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ fontSize: "0.85em", color: "#555", cursor: "pointer" }}>
+                Live preview (sandboxed iframe)
+              </summary>
+              <iframe
+                title="branded site preview"
+                srcDoc={siteBuilderResult.html}
+                sandbox="allow-scripts"
+                style={{
+                  marginTop: 6,
+                  width: "100%",
+                  height: 600,
+                  border: "1px solid #ccc",
+                  borderRadius: 6,
+                  background: "#fff",
+                }}
+              />
+            </details>
+          </div>
+        )}
+      </section>
     </section>
   );
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "agent";
 }
 
 /* -------------------------------------------------------------------------- */

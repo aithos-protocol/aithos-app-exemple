@@ -137,8 +137,12 @@ export async function generateAgentSystemPrompt(args: {
   const r = await sdk.compute.invokeBedrock({
     model: "claude-sonnet-4-6",
     system: SYSTEM_PROMPT,
+    // Bumped to 8000 (Sonnet 4.6 max output is 8192). The generated
+    // systemPrompt for verbose business descriptions can run >8000
+    // chars on its own, and the old 3000-token cap was truncating
+    // the JSON mid-string ("Unterminated string at position 8829").
+    maxTokens: 8000,
     messages: [{ role: "user", content: userPrompt }],
-    maxTokens: 3000,
   });
   console.log(
     `[agent-prompt-generator] Sonnet returned in ${(performance.now() - t0).toFixed(0)}ms, credits=${r.creditsCharged}`,

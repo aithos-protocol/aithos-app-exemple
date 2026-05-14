@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>{{TITLE}}</title>
+<!-- Favicon — substituted from the brand logo data URI by the static-site
+     builder. Inlined as a data URI so the generated page stays a single
+     self-contained file. The icon type is kept generic ("image/x-icon")
+     because the underlying source is always a PNG/SVG/JPG raster — every
+     modern browser sniffs the actual format from the data URI MIME. -->
+<link rel="icon" type="image/x-icon" href="{{FAVICON_URI}}" />
+<style>
+  :root {
+    /* Palette injected from the target site's extracted UI signature. */
+    --bg: {{BG}};
+    --panel: #ffffff;
+    --text: #0a2540;
+    --text-dim: #425466;
+    --text-soft: #697386;
+    --border: #e3e8ee;
+    --indigo: {{PRIMARY}};
+    --indigo-2: {{PRIMARY_LIGHT}};
+    --indigo-dark: {{PRIMARY_DARK}};
+    --glass-strong: rgba(255,255,255,0.75);
+    --glass-border: rgba(255,255,255,0.7);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--text); font-size: 15px; line-height: 1.6;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Header — floating glass card */
+  header.site {
+    flex-shrink: 0;
+    margin: 18px 20px 0;
+    padding: 20px 28px;
+    display: flex; align-items: center;
+    background: var(--glass-strong);
+    backdrop-filter: blur(24px) saturate(140%);
+    -webkit-backdrop-filter: blur(24px) saturate(140%);
+    border: 1px solid var(--glass-border);
+    border-radius: 18px;
+    box-shadow: 0 1px 3px rgba(10,37,64,0.025);
+    position: relative; z-index: 1;
+  }
+  .brand-block { display: flex; align-items: center; gap: 14px; }
+  /* Logo replaces the original brand-dot. The logo is provided as a data
+     URI so the page is self-contained. object-fit:contain preserves the
+     logo's aspect ratio; the box stays square to keep the original
+     header proportions. */
+  .brand-logo {
+    width: 32px; height: 32px;
+    object-fit: contain;
+    flex: 0 0 32px;
+  }
+  .brand-text { display: flex; flex-direction: column; gap: 2px; }
+  .brand {
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--text); line-height: 1.1;
+  }
+  .brand-sub {
+    font-family: 'Inter', sans-serif;
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--text-soft); font-weight: 500;
+  }
+  .go-site {
+    margin-left: auto;
+    color: var(--text); text-decoration: none;
+    font-size: 13px; padding: 9px 18px;
+    background: rgba(255,255,255,0.7); border: 1px solid var(--border);
+    border-radius: 999px;
+    backdrop-filter: blur(10px);
+    transition: all .15s; font-weight: 500;
+  }
+  .go-site:hover { background: var(--indigo); color: white; border-color: var(--indigo); }
+  .go-site::after { content: " →"; }
+
+  /* Stage — 2 columns × 3 rows. Composer goes in row 2. */
+  .stage {
+    flex: 1;
+    min-height: 0;
+    max-width: 1080px; width: 100%; margin: 0 auto;
+    padding: 28px 24px 22px;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    grid-template-rows: 1fr auto 1fr;
+    column-gap: 12px;
+    overflow: visible;
+    position: relative; z-index: 5;
+  }
+
+  .robot-col {
+    grid-column: 1; grid-row: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: flex-end;
+    padding-bottom: 40px;
+    overflow: visible;
+    position: relative;
+  }
+  .robot {
+    position: absolute;
+    top: -95px;
+    right: 0; left: auto;
+    width: 300px; height: 300px;
+    object-fit: contain;
+  }
+
+  /* Conv area — row 1 col 2.
+     Dialog text must stay fully opaque from top to bottom — the
+     previous linear-gradient mask-image was removed at the user's
+     request. Kept in sync with UI/agent.html. */
+  .conv-wrap {
+    grid-column: 2; grid-row: 1;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding-top: 44px;
+    padding-bottom: 12px;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .conv-wrap:hover {
+    scrollbar-color: rgba(99,91,255,0.4) transparent;
+  }
+  .conv-wrap::-webkit-scrollbar { width: 6px; }
+  .conv-wrap::-webkit-scrollbar-track { background: transparent; }
+  .conv-wrap::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+    transition: background .2s;
+  }
+  .conv-wrap:hover::-webkit-scrollbar-thumb { background: rgba(99,91,255,0.4); }
+  .conv-wrap:hover::-webkit-scrollbar-thumb:hover { background: rgba(99,91,255,0.65); }
+
+  .conv {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 12px;
+    min-height: 100%;
+    justify-content: flex-end;
+  }
+  .msg-line {
+    display: flex;
+    animation: fade-up .4s cubic-bezier(.2,.7,.3,1) both;
+  }
+  .msg-line.user { justify-content: flex-end; }
+  .msg {
+    max-width: 80%; padding: 13px 18px;
+    font-size: 15px; line-height: 1.55;
+    border-radius: 20px;
+  }
+  .msg.a {
+    background: var(--text);
+    color: white;
+    border-top-left-radius: 6px;
+    box-shadow: 0 4px 14px rgba(10,37,64,0.18);
+  }
+  /* User bubble — fully opaque white background (no backdrop blur) so
+     text never picks up colour from the page bg or scroll-stacked
+     messages. Kept in sync with UI/agent.html. */
+  .msg.u {
+    background: #ffffff;
+    border: 1px solid rgba(99,91,255,0.18);
+    color: var(--text);
+    border-bottom-right-radius: 6px;
+    box-shadow: 0 4px 14px rgba(10,37,64,0.05);
+  }
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* Composer — row 2 col 2. */
+  .composer {
+    grid-column: 2; grid-row: 2;
+    display: flex; flex-direction: column; gap: 10px;
+    background: transparent;
+    padding-top: 4px;
+  }
+  textarea.input {
+    width: 100%;
+    background: rgba(255,255,255,0.85);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    color: var(--text);
+    font-family: inherit; font-size: 15px; line-height: 1.55;
+    resize: none; min-height: 90px; max-height: 220px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  textarea.input::placeholder { color: var(--text-soft); }
+  textarea.input:focus {
+    outline: 0;
+    border-color: var(--indigo);
+    background: white;
+    box-shadow: 0 0 0 3px rgba(99,91,255,0.15);
+  }
+  .send {
+    width: 100%;
+    background: var(--indigo); color: white; border: 0;
+    height: 46px; padding: 0; border-radius: 12px;
+    font-family: inherit; font-weight: 500; font-size: 14px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(99,91,255,0.28);
+    letter-spacing: 0.01em;
+    transition: background .15s, transform .1s, box-shadow .15s;
+  }
+  .send:hover { background: var(--indigo-dark); box-shadow: 0 3px 12px rgba(99,91,255,0.35); }
+  .send:active { transform: translateY(1px); }
+  .send:disabled { background: rgba(99,91,255,0.35); cursor: not-allowed; box-shadow: none; }
+
+  .typing {
+    display: inline-flex; gap: 5px;
+    padding: 14px 18px;
+    background: var(--text);
+    border-radius: 20px;
+    border-top-left-radius: 6px;
+    box-shadow: 0 4px 14px rgba(10,37,64,0.18);
+  }
+  .typing span { width: 7px; height: 7px; border-radius: 50%; background: white; opacity: 0.6; animation: dot 1.4s infinite ease-in-out; }
+  .typing span:nth-child(2) { animation-delay: 0.15s; }
+  .typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  /* MEDIUM DESKTOP / LARGE TABLET — 769-1440px.
+     Empirical threshold (NOT tied to the .stage max-width, which stays
+     1080px so the conversation reading width remains comfortable).
+     Below 1440px viewport, the centred 1080-wide stage isn't inset
+     enough horizontally — the robot column lands right under the
+     header brand-block, and the negatively-positioned head (top: -95px)
+     crushes the brand subtitle. Anchoring the robot to top: 0 keeps
+     it cleanly below the header. The "head pokes above" effect kicks
+     back in on screens > 1440px (16" MBP at 1728, external monitors).
+     Kept in sync with UI/agent.html. */
+  @media (min-width: 769px) and (max-width: 1440px) {
+    .robot {
+      top: 0;
+    }
+  }
+
+  /* MOBILE — single breakpoint at 768px. */
+  @media (max-width: 768px) {
+    html, body { height: 100dvh; }
+    header.site {
+      margin: 8px 10px 0;
+      padding: 10px 14px;
+      border-radius: 14px;
+    }
+    .brand-block { gap: 10px; }
+    .brand-logo { width: 24px; height: 24px; flex-basis: 24px; }
+    .brand { font-size: 17px; }
+    .brand-sub { font-size: 9.5px; letter-spacing: 0.12em; }
+    .go-site { padding: 6px 12px; font-size: 12px; }
+
+    .stage {
+      grid-template-columns: 1fr;
+      grid-template-rows: 0 1fr auto;
+      column-gap: 0;
+      row-gap: 0;
+      padding: 10px 12px 12px;
+    }
+
+    .robot-col {
+      grid-column: 1; grid-row: 1;
+      position: static;
+      height: 0;
+      overflow: visible;
+      padding: 0;
+      pointer-events: none;
+    }
+
+    .robot {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      width: 200px; height: 200px;
+      pointer-events: none;
+      z-index: 6;
+      opacity: 0;
+      transform: translate(-50%, 30px) scale(0.6);
+      animation: robot-mobile-intro 4500ms cubic-bezier(.5,.05,.3,1) forwards;
+    }
+
+    @keyframes robot-mobile-intro {
+      0%   { opacity: 0; transform: translate(-50%, 30px) scale(0.6); }
+      15%  { opacity: 1; transform: translate(-50%, 70px) scale(1); }
+      55%  { opacity: 1; transform: translate(-50%, 70px) scale(1); }
+      90%  { opacity: 0; transform: translate(-50%, -200px) scale(0.4); }
+      100% { opacity: 0; transform: translate(-50%, -250px) scale(0.3); visibility: hidden; }
+    }
+
+    .conv-wrap {
+      grid-column: 1; grid-row: 2;
+      padding-top: 290px;
+      animation: conv-mobile-intro 4500ms cubic-bezier(.5,.05,.3,1) forwards;
+    }
+
+    @keyframes conv-mobile-intro {
+      0%, 55%   { padding-top: 290px; }
+      90%, 100% { padding-top: 8px; }
+    }
+
+    .conv .msg-line:first-child {
+      opacity: 0;
+      animation: fade-up 600ms 800ms cubic-bezier(.2,.7,.3,1) both;
+    }
+
+    .msg {
+      max-width: 88%;
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 11px 15px;
+      border-radius: 18px;
+    }
+
+    .composer {
+      grid-column: 1; grid-row: 3;
+      gap: 8px;
+      padding-top: 2px;
+    }
+    textarea.input {
+      font-size: 16px;
+      line-height: 1.4;
+      padding: 11px 14px;
+      min-height: 64px;
+      max-height: 130px;
+      border-radius: 12px;
+    }
+    .send {
+      height: 44px;
+      font-size: 14px;
+      border-radius: 11px;
+    }
+  }
+
+  @media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+    .robot { display: none; animation: none; }
+    .conv-wrap { padding-top: 8px; animation: none; }
+    .conv .msg-line:first-child {
+      opacity: 1;
+      animation: fade-up 400ms cubic-bezier(.2,.7,.3,1) both;
+    }
+  }
+
+  @media (max-width: 380px) {
+    header.site { padding: 9px 12px; margin: 6px 8px 0; }
+    .brand { font-size: 16px; }
+    .brand-sub { font-size: 9px; }
+    .stage { padding: 8px 10px 10px; }
+    .robot { width: 160px; height: 160px; }
+    .conv-wrap { padding-top: 250px; }
+    @keyframes conv-mobile-intro {
+      0%, 55%   { padding-top: 250px; }
+      90%, 100% { padding-top: 8px; }
+    }
+    .msg { max-width: 92%; font-size: 13.5px; padding: 10px 13px; }
+    textarea.input { min-height: 56px; }
+  }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="brand-block">
+    <img class="brand-logo" src="{{LOGO_URI}}" alt="" />
+    <div class="brand-text">
+      <div class="brand">{{BRAND}}</div>
+      <span class="brand-sub">{{BRAND_SUB}}</span>
+    </div>
+  </div>
+  <a class="go-site" href="{{CTA_HREF}}">{{CTA_LABEL}}</a>
+</header>
+
+<div class="stage">
+  <aside class="robot-col">
+    <img class="robot" src="{{ROBOT_URI}}" alt="" />
+  </aside>
+
+  <div class="conv-wrap">
+    <div class="conv" id="conv">
+      <div class="msg-line"><div class="msg a">{{INTRO_MESSAGE}}</div></div>
+    </div>
+  </div>
+
+  <div class="composer">
+    <textarea id="input" class="input" placeholder="{{PLACEHOLDER}}" rows="3"></textarea>
+    <button id="send" class="send">{{SEND_LABEL}}</button>
+  </div>
+</div>
+
+<script>
+  const conv = document.getElementById('conv');
+  const input = document.getElementById('input');
+  const sendBtn = document.getElementById('send');
+
+  const replies = {{REPLIES_JSON}};
+
+  const wrap = document.querySelector('.conv-wrap');
+  function scrollToBottom() {
+    requestAnimationFrame(() => { wrap.scrollTop = 0; });
+  }
+
+  function appendAgent(text) {
+    const line = document.createElement('div');
+    line.className = 'msg-line';
+    const m = document.createElement('div');
+    m.className = 'msg a';
+    m.textContent = text;
+    line.appendChild(m);
+    conv.appendChild(line);
+    scrollToBottom();
+  }
+  function appendUser(text) {
+    const line = document.createElement('div');
+    line.className = 'msg-line user';
+    const m = document.createElement('div');
+    m.className = 'msg u';
+    m.textContent = text;
+    line.appendChild(m);
+    conv.appendChild(line);
+    scrollToBottom();
+  }
+  function appendTyping() {
+    const line = document.createElement('div');
+    line.className = 'msg-line';
+    line.dataset.typing = '1';
+    const t = document.createElement('div');
+    t.className = 'typing';
+    t.innerHTML = '<span></span><span></span><span></span>';
+    line.appendChild(t);
+    conv.appendChild(line);
+    scrollToBottom();
+    return line;
+  }
+
+  function sendMessage() {
+    const text = input.value.trim();
+    if (!text) return;
+    appendUser(text);
+    input.value = '';
+    input.style.height = '';
+    sendBtn.disabled = true;
+    const t = appendTyping();
+    const delay = 600 + Math.random() * 900;
+    setTimeout(() => {
+      t.remove();
+      appendAgent(replies[Math.floor(Math.random() * replies.length)]);
+      sendBtn.disabled = false;
+      input.focus();
+    }, delay);
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+  window.addEventListener('load', () => input.focus());
+</script>
+</body>
+</html>

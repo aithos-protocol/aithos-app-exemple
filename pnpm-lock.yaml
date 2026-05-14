@@ -12,8 +12,8 @@ importers:
         specifier: ^0.1.0-alpha.13
         version: 0.1.0-alpha.13
       '@aithos/sdk':
-        specifier: 0.1.0-alpha.20
-        version: 0.1.0-alpha.20(@aithos/protocol-client@0.1.0-alpha.13)
+        specifier: 0.1.0-alpha.23
+        version: 0.1.0-alpha.23(@aithos/protocol-client@0.1.0-alpha.13)
       '@mediapipe/tasks-vision':
         specifier: ^0.10.20
         version: 0.10.35
@@ -53,8 +53,8 @@ packages:
     resolution: {integrity: sha512-/Dm9Ionzpx7iFMmE8FIU7yhw7COqhAmAoXeckhOX1v4NnkiAmje5WBgsXnZzWXykaKWLghEqRss0bRru3Wik1Q==}
     engines: {node: '>=20'}
 
-  '@aithos/sdk@0.1.0-alpha.20':
-    resolution: {integrity: sha512-pDOzBkL67F5/iZyJpJisg79pUSDSbVpiiIXDViez2Z9g+Vh5f3B9bN+BsKNqFnfNlHuxt3LEYjVeeJljvjR8+A==}
+  '@aithos/sdk@0.1.0-alpha.23':
+    resolution: {integrity: sha512-UjhN1qCuw+71ytCdbxiUyavdpaMl6nhQrviBA8/hRiUcR2xF/8PYmagVIlURZSbSRGeJKVL2U0u+E8WDYsAZZg==}
     engines: {node: '>=20'}
     peerDependencies:
       '@aithos/protocol-client': '>=0.1.0-alpha.13 <0.2.0'
@@ -749,7 +749,7 @@ snapshots:
       adm-zip: 0.5.17
       ulid: 2.4.0
 
-  '@aithos/sdk@0.1.0-alpha.20(@aithos/protocol-client@0.1.0-alpha.13)':
+  '@aithos/sdk@0.1.0-alpha.23(@aithos/protocol-client@0.1.0-alpha.13)':
     dependencies:
       '@aithos/protocol-client': 0.1.0-alpha.13
 
