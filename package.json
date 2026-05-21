@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@aithos/protocol-client": "^0.1.0-alpha.13",
-    "@aithos/sdk": "0.1.0-alpha.32",
+    "@aithos/sdk": "0.1.0-alpha.33",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2"

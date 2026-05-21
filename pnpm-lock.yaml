@@ -12,8 +12,8 @@ importers:
         specifier: ^0.1.0-alpha.13
         version: 0.1.0-alpha.13
       '@aithos/sdk':
-        specifier: 0.1.0-alpha.32
-        version: 0.1.0-alpha.32(@aithos/protocol-client@0.1.0-alpha.13)
+        specifier: 0.1.0-alpha.33
+        version: 0.1.0-alpha.33(@aithos/protocol-client@0.1.0-alpha.13)
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -50,8 +50,8 @@ packages:
     resolution: {integrity: sha512-/Dm9Ionzpx7iFMmE8FIU7yhw7COqhAmAoXeckhOX1v4NnkiAmje5WBgsXnZzWXykaKWLghEqRss0bRru3Wik1Q==}
     engines: {node: '>=20'}
 
-  '@aithos/sdk@0.1.0-alpha.32':
-    resolution: {integrity: sha512-HGD9d9o9qOQm4aiBSWDw4nSEuV5nAnLYQdr8E/OBi80fF3HapYFFKRgMh/73p+M+pv8+bIynkUR3aYFn1XkmMg==}
+  '@aithos/sdk@0.1.0-alpha.33':
+    resolution: {integrity: sha512-q/sPjpZVmTR8m31YwxlVUnE8ytahGorpNqLFImvK/EonkRsPcdbNNFTA1fS7pquyaAJiB59ormjepYkJwZKXpA==}
     engines: {node: '>=20'}
     peerDependencies:
       '@aithos/protocol-client': '>=0.1.0-alpha.13 <0.2.0'
@@ -744,7 +744,7 @@ snapshots:
       adm-zip: 0.5.17
       ulid: 2.4.0
 
-  '@aithos/sdk@0.1.0-alpha.32(@aithos/protocol-client@0.1.0-alpha.13)':
+  '@aithos/sdk@0.1.0-alpha.33(@aithos/protocol-client@0.1.0-alpha.13)':
     dependencies:
       '@aithos/protocol-client': 0.1.0-alpha.13
 
