@@ -9,6 +9,7 @@ import { Compute } from "./routes/Compute.js";
 import { Home } from "./routes/Home.js";
 import { Mandates } from "./routes/Mandates.js";
 import { Profile } from "./routes/Profile.js";
+import { ResetPassword } from "./routes/ResetPassword.js";
 import { Wallet } from "./routes/Wallet.js";
 
 export function App() {
@@ -19,6 +20,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/auth/reset" element={<ResetPassword />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/mandates" element={<Mandates />} />
           <Route path="/wallet" element={<Wallet />} />

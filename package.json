@@ -12,8 +12,8 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@aithos/sdk": "^0.1.0-alpha.5",
-    "@aithos/protocol-client": "^0.1.0-alpha.11",
+    "@aithos/sdk": "^0.1.0-alpha.30",
+    "@aithos/protocol-client": "^0.1.0-alpha.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2"

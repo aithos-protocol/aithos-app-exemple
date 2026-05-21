@@ -10,7 +10,13 @@ import { AithosSDKError } from "@aithos/sdk";
 
 import { useSdk } from "../sdk-context.js";
 
-type Tab = "signin" | "signup" | "google" | "recovery" | "mandate";
+type Tab =
+  | "signin"
+  | "signup"
+  | "custodial"
+  | "google"
+  | "recovery"
+  | "mandate";
 
 export function Home() {
   const { auth, state, bumpVersion } = useSdk();
@@ -67,6 +73,12 @@ export function Home() {
               Sign up
             </button>
             <button
+              className={tab === "custodial" ? "active" : ""}
+              onClick={() => setTab("custodial")}
+            >
+              Custodial
+            </button>
+            <button
               className={tab === "google" ? "active" : ""}
               onClick={() => setTab("google")}
             >
@@ -87,6 +99,7 @@ export function Home() {
           </div>
           {tab === "signin" && <SignInForm />}
           {tab === "signup" && <SignUpForm />}
+          {tab === "custodial" && <CustodialForm />}
           {tab === "google" && <GoogleForm />}
           {tab === "recovery" && <RecoveryForm />}
           {tab === "mandate" && <MandateForm />}
@@ -321,6 +334,132 @@ function SignUpForm() {
           >
             Download {recovery.filename}
           </a>
+        </div>
+      )}
+    </form>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Custodial sign-in + magic-link reset                                      */
+/* -------------------------------------------------------------------------- */
+
+// Custodial mode is the "Coinbase-style" flow: Aithos custody the user's
+// Ed25519 seed bundle in KMS. Sign-up is server-only (requires an
+// `aithos_<env>_*` API key — cf. scripts/signup-custodial.mjs) so the
+// browser only exposes sign-in + password reset.
+//
+// Reset is a magic link: the user clicks "Forgot password", the auth
+// Lambda sends an email with a URL of shape
+// `<reset_base_url>?email=…&token=…`, the user lands on /auth/reset
+// and finalises the change. The form below covers the "request" half;
+// the "finalise" half lives in routes/ResetPassword.tsx.
+
+function CustodialForm() {
+  const { auth, bumpVersion } = useSdk();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    setResetSent(false);
+    try {
+      const r = await auth.signInCustodial({ email, password });
+      if (r.passwordMustChange) {
+        // First login after a manual reset by ops — UX nudge to change
+        // password. The session is fully valid, we just flag it.
+        // eslint-disable-next-line no-console
+        console.info(
+          "[aithos] passwordMustChange=true — nudge the user to reset.",
+        );
+      }
+      bumpVersion();
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestReset = async () => {
+    if (!email) {
+      setError("Saisis ton email pour recevoir un lien de réinitialisation.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await auth.requestPasswordReset({ email });
+      // Backend ALWAYS resolves silently (no enumeration), so we
+      // can't tell if the email was registered. Show the same
+      // confirmation either way — that's the design.
+      setResetSent(true);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        submit();
+      }}
+    >
+      <p className="lede">
+        Mode <strong>custodial</strong> : Aithos garde tes clés en KMS, tu te
+        connectes avec email + mot de passe (comme un SaaS classique). La
+        création de compte se fait côté backend de ton app via{" "}
+        <code>signUpCustodial</code> (clé API server-only — cf.{" "}
+        <code>scripts/signup-custodial.mjs</code>).
+      </p>
+      <label>
+        <span>Email</span>
+        <input
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      <label>
+        <span>Mot de passe</span>
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      <div className="row">
+        <button type="submit" disabled={busy || !email || !password}>
+          {busy ? "Connexion…" : "Sign in (custodial)"}
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={requestReset}
+          disabled={busy || !email}
+          title="Envoie un magic link de réinitialisation à l'email saisi."
+        >
+          Mot de passe oublié ?
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {resetSent && (
+        <div className="success">
+          Si <code>{email}</code> est associé à un compte custodial, un mail
+          vient de partir avec un lien de réinitialisation. Vérifie ta boîte
+          (et les spams). Le lien expire dans 30 minutes.
         </div>
       )}
     </form>
