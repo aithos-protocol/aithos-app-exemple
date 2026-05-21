@@ -345,33 +345,60 @@ function SignUpForm() {
 /* -------------------------------------------------------------------------- */
 
 // Custodial mode is the "Coinbase-style" flow: Aithos custody the user's
-// Ed25519 seed bundle in KMS. Sign-up is server-only (requires an
-// `aithos_<env>_*` API key — cf. scripts/signup-custodial.mjs) so the
-// browser only exposes sign-in + password reset.
+// Ed25519 seed bundle in KMS. Sign-up is browser-driven via the public
+// client key (`pk_<env>_<…>`) configured on the AithosAuth constructor
+// — no app-side backend needed. The account starts as *pending*; the
+// user must click the link sent to their inbox before /sign-in works.
 //
-// Reset is a magic link: the user clicks "Forgot password", the auth
-// Lambda sends an email with a URL of shape
-// `<reset_base_url>?email=…&token=…`, the user lands on /auth/reset
-// and finalises the change. The form below covers the "request" half;
-// the "finalise" half lives in routes/ResetPassword.tsx.
+// Magic-link reset uses the same shape: `<reset_base_url>?email=&token=`.
+// Email confirmation follows the same shape:
+// `<verify_base_url>?email=&token=`. The two landing pages are
+// routes/ResetPassword.tsx and routes/VerifyEmail.tsx.
+
+type CustodialMode = "signin" | "signup";
 
 function CustodialForm() {
+  const [mode, setMode] = useState<CustodialMode>("signin");
+  return (
+    <div className="stack">
+      <div className="tabs" style={{ marginBottom: 8 }}>
+        <button
+          className={mode === "signin" ? "active" : ""}
+          onClick={() => setMode("signin")}
+        >
+          Connexion
+        </button>
+        <button
+          className={mode === "signup" ? "active" : ""}
+          onClick={() => setMode("signup")}
+        >
+          Créer un compte
+        </button>
+      </div>
+      {mode === "signin" ? <CustodialSignInForm /> : <CustodialSignUpForm />}
+    </div>
+  );
+}
+
+function CustodialSignInForm() {
   const { auth, bumpVersion } = useSdk();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [resetSent, setResetSent] = useState(false);
+  const [resendSent, setResendSent] = useState(false);
 
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setErrorCode(null);
     setResetSent(false);
+    setResendSent(false);
     try {
       const r = await auth.signInCustodial({ email, password });
       if (r.passwordMustChange) {
-        // First login after a manual reset by ops — UX nudge to change
-        // password. The session is fully valid, we just flag it.
         // eslint-disable-next-line no-console
         console.info(
           "[aithos] passwordMustChange=true — nudge the user to reset.",
@@ -380,6 +407,7 @@ function CustodialForm() {
       bumpVersion();
     } catch (e) {
       setError(formatError(e));
+      if (e instanceof AithosSDKError) setErrorCode(e.code);
     } finally {
       setBusy(false);
     }
@@ -392,11 +420,9 @@ function CustodialForm() {
     }
     setBusy(true);
     setError(null);
+    setErrorCode(null);
     try {
       await auth.requestPasswordReset({ email });
-      // Backend ALWAYS resolves silently (no enumeration), so we
-      // can't tell if the email was registered. Show the same
-      // confirmation either way — that's the design.
       setResetSent(true);
     } catch (e) {
       setError(formatError(e));
@@ -404,6 +430,22 @@ function CustodialForm() {
       setBusy(false);
     }
   };
+
+  const resendVerification = async () => {
+    if (!email) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await auth.resendVerificationEmail({ email });
+      setResendSent(true);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const emailNotVerified = errorCode === "auth_email_not_verified";
 
   return (
     <form
@@ -416,9 +458,8 @@ function CustodialForm() {
       <p className="lede">
         Mode <strong>custodial</strong> : Aithos garde tes clés en KMS, tu te
         connectes avec email + mot de passe (comme un SaaS classique). La
-        création de compte se fait côté backend de ton app via{" "}
-        <code>signUpCustodial</code> (clé API server-only — cf.{" "}
-        <code>scripts/signup-custodial.mjs</code>).
+        création de compte se fait dans l'onglet "Créer un compte" et exige
+        une confirmation par mail avant la première connexion.
       </p>
       <label>
         <span>Email</span>
@@ -454,14 +495,194 @@ function CustodialForm() {
           Mot de passe oublié ?
         </button>
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error">
+          {error}
+          {emailNotVerified && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={resendVerification}
+                disabled={busy || !email}
+              >
+                Renvoyer le mail de confirmation
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {resendSent && (
+        <div className="success">
+          Si <code>{email}</code> existe et n'est pas encore vérifié, un nouveau
+          mail vient de partir. Vérifie ta boîte (et les spams). Tu peux
+          relancer une fois par heure.
+        </div>
+      )}
       {resetSent && (
         <div className="success">
           Si <code>{email}</code> est associé à un compte custodial, un mail
           vient de partir avec un lien de réinitialisation. Vérifie ta boîte
-          (et les spams). Le lien expire dans 30 minutes.
+          (et les spams). Le lien expire dans 1 heure.
         </div>
       )}
+    </form>
+  );
+}
+
+function CustodialSignUpForm() {
+  const { auth } = useSdk();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ email: string; mailSent: boolean } | null>(
+    null,
+  );
+  const [resendSent, setResendSent] = useState(false);
+
+  const passwordsMatch = password.length > 0 && password === confirm;
+  const passwordLongEnough = password.length >= 10;
+  const canSubmit =
+    !busy && !!email && passwordsMatch && passwordLongEnough && !pending;
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    setResendSent(false);
+    try {
+      const r = await auth.signUpCustodial({
+        email,
+        password,
+        ...(displayName ? { displayName } : {}),
+      });
+      setPending({ email: r.email, mailSent: r.mailSent });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resend = async () => {
+    if (!pending) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await auth.resendVerificationEmail({ email: pending.email });
+      setResendSent(true);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (pending) {
+    return (
+      <div className="stack">
+        <p className="lede">
+          Compte créé pour <code>{pending.email}</code>. Clique sur le lien
+          de confirmation envoyé à cette adresse (lien valable 1h) — tu seras
+          automatiquement connecté(e) en arrivant sur la page.
+        </p>
+        {pending.mailSent ? (
+          <div className="success">
+            Mail envoyé. Vérifie ta boîte (et les spams).
+          </div>
+        ) : (
+          <div className="error">
+            ⚠️ Le compte a été créé mais le mail n'a pas pu partir. Clique sur
+            "Renvoyer" pour réessayer.
+          </div>
+        )}
+        <div className="row" style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={resend}
+            disabled={busy}
+          >
+            Renvoyer le mail de confirmation
+          </button>
+        </div>
+        {resendSent && (
+          <div className="success">
+            Si le compte existe et n'est pas encore vérifié, un nouveau mail
+            vient de partir. Tu peux relancer une fois par heure.
+          </div>
+        )}
+        {error && <div className="error">{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        if (canSubmit) submit();
+      }}
+    >
+      <p className="lede">
+        Création de compte <strong>custodial</strong> — Aithos garde tes clés
+        en KMS et tu te connectes avec email + mot de passe. Avant la première
+        connexion, tu recevras un mail pour confirmer que cette adresse est
+        bien la tienne.
+      </p>
+      <label>
+        <span>Email</span>
+        <input
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      <label>
+        <span>Mot de passe (≥ 10 caractères)</span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          minLength={10}
+          disabled={busy}
+        />
+      </label>
+      <label>
+        <span>Confirme le mot de passe</span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          minLength={10}
+          disabled={busy}
+        />
+      </label>
+      <label>
+        <span>Nom affiché (optionnel)</span>
+        <input
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      {password && confirm && !passwordsMatch && (
+        <div className="error">Les deux mots de passe ne correspondent pas.</div>
+      )}
+      <div className="row">
+        <button type="submit" disabled={!canSubmit}>
+          {busy ? "Création…" : "Créer le compte"}
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
     </form>
   );
 }

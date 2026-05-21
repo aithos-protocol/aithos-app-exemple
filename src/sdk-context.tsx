@@ -86,13 +86,24 @@ const SdkContext = createContext<SdkContextValue | null>(null);
 export function SdkProvider({ children }: { readonly children: ReactNode }) {
   // One auth + one sdk for the whole app. useMemo ensures we don't
   // rebuild on re-render.
-  const [auth] = useState(() =>
-    new AithosAuth({
+  const [auth] = useState(() => {
+    // Read the public client key from Vite env. When set, the SDK can
+    // call /custodial/sign-up, /custodial/verify and /verify/resend
+    // directly from the browser (origin-gated by the backend) — no
+    // application-side backend required. Define it in .env.local:
+    //   VITE_AITHOS_PUBLIC_KEY=pk_test_<…>
+    // Leave it unset for SSO-only / recovery-only deployments.
+    const publicKey =
+      typeof import.meta.env.VITE_AITHOS_PUBLIC_KEY === "string"
+        ? import.meta.env.VITE_AITHOS_PUBLIC_KEY
+        : undefined;
+    return new AithosAuth({
       // Persist the JWT across reloads via localStorage. Sessions are
       // pinned to the page origin like any cookie, only longer-lived.
       sessionStore: localStorageStore(),
-    }),
-  );
+      ...(publicKey ? { publicKey } : {}),
+    });
+  });
   const [sdk] = useState(() => new AithosSDK({ auth, appDid: APP_DID }));
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
