@@ -18,6 +18,9 @@ import type {
   ImageModelId,
   InvokeBedrockResult,
   InvokeImageResult,
+  InvokeTranscribeResult,
+  TranscribeModelId,
+  TranscribeProgressState,
 } from "@aithos/sdk";
 
 import { useSdk } from "../sdk-context.js";
@@ -48,7 +51,12 @@ const ASPECT_RATIOS: ReadonlyArray<ImageAspectRatio> = [
   "21:9",
 ];
 
-type ComputeTab = "text" | "image";
+const TRANSCRIBE_MODELS: ReadonlyArray<{ id: TranscribeModelId; label: string; lang: string }> = [
+  { id: "transcribe:aws-fr-standard", label: "AWS Transcribe — Français", lang: "fr-FR" },
+  { id: "transcribe:aws-en-standard", label: "AWS Transcribe — English (US)", lang: "en-US" },
+];
+
+type ComputeTab = "text" | "image" | "transcribe";
 
 export function Compute() {
   const { state } = useSdk();
@@ -89,8 +97,20 @@ export function Compute() {
         >
           Image
         </button>
+        <button
+          className={tab === "transcribe" ? "active" : ""}
+          onClick={() => setTab("transcribe")}
+        >
+          Transcribe
+        </button>
       </div>
-      {tab === "text" ? <TextPanel /> : <ImagePanel />}
+      {tab === "text" ? (
+        <TextPanel />
+      ) : tab === "image" ? (
+        <ImagePanel />
+      ) : (
+        <TranscribePanel />
+      )}
     </section>
   );
 }
@@ -188,6 +208,187 @@ function TextPanel() {
             <dt>Tokens (in/out)</dt>
             <dd>
               {out.usage.inputTokens} / {out.usage.outputTokens}
+            </dd>
+            <dt>Credits charged</dt>
+            <dd>{out.creditsCharged.toLocaleString()}</dd>
+            <dt>Wallet balance</dt>
+            <dd>{out.walletBalance.toLocaleString()}</dd>
+            <dt>Audit id</dt>
+            <dd>
+              <code>{out.auditId}</code>
+            </dd>
+          </dl>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Transcribe panel — sdk.compute.invokeTranscribe                           */
+/*                                                                            */
+/*  Record from the mic (MediaRecorder) or pick an audio file, then send the  */
+/*  Blob to the compute proxy. The SDK does prepare -> S3 upload -> start ->   */
+/*  poll under the hood; we just render onProgress + the returned transcript. */
+/*  Single responsibility: audio -> text. What you do with the text is your   */
+/*  app's business — here we just display it.                                 */
+/* -------------------------------------------------------------------------- */
+
+function TranscribePanel() {
+  const { sdk } = useSdk();
+  const [model, setModel] = useState<TranscribeModelId>(TRANSCRIBE_MODELS[0]!.id);
+  const [mandateId, setMandateId] = useState("");
+  const [audio, setAudio] = useState<Blob | null>(null);
+  const [audioLabel, setAudioLabel] = useState<string>("");
+  const [recording, setRecording] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [out, setOut] = useState<InvokeTranscribeResult | null>(null);
+  const recorderRef = useState<{ rec: MediaRecorder | null }>({ rec: null })[0];
+
+  const lang = TRANSCRIBE_MODELS.find((m) => m.id === model)?.lang ?? "fr-FR";
+
+  const startRecording = async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks: Blob[] = [];
+      const rec = new MediaRecorder(stream);
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      rec.onstop = () => {
+        const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+        setAudio(blob);
+        setAudioLabel(`recording (${Math.round(blob.size / 1024)} KB)`);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      recorderRef.rec = rec;
+      rec.start();
+      setRecording(true);
+    } catch (e) {
+      setError(formatError(e));
+    }
+  };
+
+  const stopRecording = () => {
+    recorderRef.rec?.stop();
+    setRecording(false);
+  };
+
+  const onFile = (file: File | undefined) => {
+    if (!file) return;
+    setAudio(file);
+    setAudioLabel(`${file.name} (${Math.round(file.size / 1024)} KB)`);
+  };
+
+  const submit = async () => {
+    if (!audio) return;
+    setBusy(true);
+    setError(null);
+    setOut(null);
+    setPhase("queued");
+    try {
+      const r = await sdk.compute.invokeTranscribe({
+        mandateId,
+        audio,
+        model,
+        languageCode: lang,
+        onProgress: (s: TranscribeProgressState) => {
+          setPhase(
+            s.phase === "uploading"
+              ? `uploading ${Math.round((s.bytesUploaded / Math.max(1, s.totalBytes)) * 100)}%`
+              : s.phase === "processing"
+                ? `processing (${s.elapsedSec}s)`
+                : s.phase,
+          );
+        },
+      });
+      setOut(r);
+      setPhase("completed");
+    } catch (e) {
+      setError(formatError(e));
+      setPhase("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <label>
+          <span>Mandate ID</span>
+          <input
+            type="text"
+            value={mandateId}
+            onChange={(e) => setMandateId(e.target.value)}
+            placeholder="mandate:01H8XYZ..."
+          />
+        </label>
+        <label>
+          <span>Model / language</span>
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value as TranscribeModelId)}
+          >
+            {TRANSCRIBE_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="row">
+          {!recording ? (
+            <button type="button" onClick={() => void startRecording()}>
+              ● Record
+            </button>
+          ) : (
+            <button type="button" onClick={stopRecording}>
+              ■ Stop
+            </button>
+          )}
+          <label style={{ flex: "1 1 220px" }}>
+            <span>…or upload an audio file</span>
+            <input
+              type="file"
+              accept="audio/*"
+              onChange={(e) => onFile(e.target.files?.[0])}
+            />
+          </label>
+        </div>
+        {audioLabel && (
+          <p className="lede" style={{ margin: 0 }}>
+            Selected: <code>{audioLabel}</code>
+          </p>
+        )}
+        <div className="row">
+          <button type="submit" disabled={busy || !audio || !mandateId}>
+            {busy ? `Transcribing… ${phase}` : "Transcribe"}
+          </button>
+        </div>
+      </form>
+      {error && <div className="error">{error}</div>}
+      {out && (
+        <div className="stack" style={{ marginTop: 16 }}>
+          <h3>Transcript</h3>
+          <pre>{out.text}</pre>
+          <dl className="kvtable">
+            <dt>Duration</dt>
+            <dd>{out.durationSec.toFixed(2)}s</dd>
+            <dt>Language</dt>
+            <dd>{out.languageCode}</dd>
+            <dt>Words / segments</dt>
+            <dd>
+              {out.words.length} / {out.segments.length}
             </dd>
             <dt>Credits charged</dt>
             <dd>{out.creditsCharged.toLocaleString()}</dd>
