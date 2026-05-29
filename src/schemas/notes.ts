@@ -141,13 +141,17 @@ export const notesV1JsonSchema = {
       type: "string",
       format: "date-time",
       "aithos:indexable": true,
-      "aithos:auto": true,
+      // Populated server-side at insert; immutable afterwards. The PDS
+      // enforces the literal "on_insert" / "on_modify" enum here; a
+      // boolean `true` is rejected with AITHOS_DATA_SCHEMA_INVALID.
+      "aithos:auto": "on_insert",
     },
     modified_at: {
       type: "string",
       format: "date-time",
       "aithos:indexable": true,
-      "aithos:auto": true,
+      // Refreshed server-side on every write (insert + update).
+      "aithos:auto": "on_modify",
     },
   },
 } as const;
