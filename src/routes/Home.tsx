@@ -10,17 +10,17 @@ import { AithosSDKError } from "@aithos/sdk";
 
 import { useSdk } from "../sdk-context.js";
 
-type Tab =
-  | "signin"
-  | "signup"
-  | "custodial"
-  | "google"
-  | "recovery"
-  | "mandate";
+// Tabs that are currently surfaced to developers. The legacy
+// zero-knowledge `signin` / `signup` flows (auth.signIn / auth.signUp)
+// remain implemented further down this file (SignInForm /
+// SignUpForm) so they can be re-enabled by a flag, but are no longer
+// reachable from this UI — new integrations should default to the
+// custodial path (renamed "Email + mot de passe" here) or Google SSO.
+type Tab = "email" | "google" | "recovery" | "mandate";
 
 export function Home() {
   const { auth, state, bumpVersion } = useSdk();
-  const [tab, setTab] = useState<Tab>("signin");
+  const [tab, setTab] = useState<Tab>("email");
 
   return (
     <>
@@ -28,9 +28,9 @@ export function Home() {
         <h2>Aithos SDK — example app</h2>
         <p className="lede">
           Demonstrates every entry point of <code>@aithos/sdk</code>: sign-in
-          via email/password, Google SSO, recovery file, or imported mandate.
-          Then ethos editing, mandate lifecycle, wallet top-up, and compute
-          calls.
+          via email + password (custodial), Google SSO, recovery file, or
+          imported mandate. Then ethos editing, mandate lifecycle, wallet
+          top-up, compute calls (text + image), and PDS data CRUD.
         </p>
         <SessionState />
       </section>
@@ -56,27 +56,17 @@ export function Home() {
         <section>
           <h2>Sign in</h2>
           <p className="lede">
-            Pick an entry door. They all converge on the same in-memory auth
-            state (<code>OwnerSigners</code> + optional JWT).
+            Pick an entry door. They all converge on the same in-memory
+            auth state (<code>OwnerSigners</code> + optional JWT). The
+            recommended path for new integrations is{" "}
+            <strong>Email + mot de passe</strong> (custodial mode).
           </p>
           <div className="tabs">
             <button
-              className={tab === "signin" ? "active" : ""}
-              onClick={() => setTab("signin")}
+              className={tab === "email" ? "active" : ""}
+              onClick={() => setTab("email")}
             >
-              Sign in
-            </button>
-            <button
-              className={tab === "signup" ? "active" : ""}
-              onClick={() => setTab("signup")}
-            >
-              Sign up
-            </button>
-            <button
-              className={tab === "custodial" ? "active" : ""}
-              onClick={() => setTab("custodial")}
-            >
-              Custodial
+              Email + mot de passe
             </button>
             <button
               className={tab === "google" ? "active" : ""}
@@ -97,9 +87,7 @@ export function Home() {
               Mandate
             </button>
           </div>
-          {tab === "signin" && <SignInForm />}
-          {tab === "signup" && <SignUpForm />}
-          {tab === "custodial" && <CustodialForm />}
+          {tab === "email" && <CustodialForm />}
           {tab === "google" && <GoogleForm />}
           {tab === "recovery" && <RecoveryForm />}
           {tab === "mandate" && <MandateForm />}
@@ -178,10 +166,15 @@ function SessionState() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Sign-in form (email + password)                                           */
+/*  Sign-in form — LEGACY zero-knowledge flow (auth.signIn).                  */
+/*                                                                            */
+/*  Exported (not rendered) so the legacy flow stays compiled and easy to     */
+/*  re-mount from another page or behind a dev flag. New integrations should  */
+/*  use CustodialForm (rendered under the "Email + mot de passe" tab).        */
 /* -------------------------------------------------------------------------- */
 
-function SignInForm() {
+/** @deprecated Use CustodialSignInForm. Retained for reference / debugging. */
+export function SignInForm() {
   const { auth, bumpVersion } = useSdk();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -238,10 +231,15 @@ function SignInForm() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Sign-up form                                                              */
+/*  Sign-up form — LEGACY zero-knowledge flow (auth.signUp).                  */
+/*                                                                            */
+/*  Exported (not rendered) so the legacy flow stays compiled and easy to     */
+/*  re-mount from another page or behind a dev flag. New integrations should  */
+/*  use CustodialSignUpForm (rendered under the "Email + mot de passe" tab).  */
 /* -------------------------------------------------------------------------- */
 
-function SignUpForm() {
+/** @deprecated Use CustodialSignUpForm. Retained for reference / debugging. */
+export function SignUpForm() {
   const { auth, bumpVersion } = useSdk();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -456,10 +454,11 @@ function CustodialSignInForm() {
       }}
     >
       <p className="lede">
-        Mode <strong>custodial</strong> : Aithos garde tes clés en KMS, tu te
-        connectes avec email + mot de passe (comme un SaaS classique). La
-        création de compte se fait dans l'onglet "Créer un compte" et exige
-        une confirmation par mail avant la première connexion.
+        Auth <strong>email + mot de passe</strong> — mode dit{" "}
+        <em>custodial</em> côté SDK (Aithos garde tes clés en KMS, comme un
+        SaaS classique). La création de compte se fait dans l'onglet "Créer
+        un compte" et exige une confirmation par mail avant la première
+        connexion.
       </p>
       <label>
         <span>Email</span>
@@ -628,10 +627,10 @@ function CustodialSignUpForm() {
       }}
     >
       <p className="lede">
-        Création de compte <strong>custodial</strong> — Aithos garde tes clés
-        en KMS et tu te connectes avec email + mot de passe. Avant la première
-        connexion, tu recevras un mail pour confirmer que cette adresse est
-        bien la tienne.
+        Création de compte <strong>email + mot de passe</strong> (mode{" "}
+        <em>custodial</em> côté SDK — Aithos garde tes clés en KMS). Avant
+        la première connexion, tu recevras un mail pour confirmer que cette
+        adresse est bien la tienne.
       </p>
       <label>
         <span>Email</span>

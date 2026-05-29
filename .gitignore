@@ -8,3 +8,4 @@ _stale_*
 
 # Vite env-local (Aithos public client key, never commit secrets here)
 .env.local
+*.tsbuildinfo
