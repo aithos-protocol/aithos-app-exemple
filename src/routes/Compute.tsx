@@ -291,7 +291,10 @@ function TranscribePanel() {
     setPhase("queued");
     try {
       const r = await sdk.compute.invokeTranscribe({
-        mandateId,
+        // Owner sessions don't need a mandate (the proxy skips mandate
+        // checks on owner-signed envelopes); pass one only if provided
+        // (delegate sessions, or to attribute spend to a specific mandate).
+        ...(mandateId ? { mandateId } : {}),
         audio,
         model,
         languageCode: lang,
@@ -325,12 +328,12 @@ function TranscribePanel() {
         }}
       >
         <label>
-          <span>Mandate ID</span>
+          <span>Mandate ID (optional — leave empty when signed in as owner)</span>
           <input
             type="text"
             value={mandateId}
             onChange={(e) => setMandateId(e.target.value)}
-            placeholder="mandate:01H8XYZ..."
+            placeholder="(owner) or mandate:01H8XYZ..."
           />
         </label>
         <label>
@@ -371,7 +374,7 @@ function TranscribePanel() {
           </p>
         )}
         <div className="row">
-          <button type="submit" disabled={busy || !audio || !mandateId}>
+          <button type="submit" disabled={busy || !audio}>
             {busy ? `Transcribing… ${phase}` : "Transcribe"}
           </button>
         </div>
