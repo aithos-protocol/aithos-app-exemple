@@ -6,7 +6,6 @@ import { Route, Routes } from "react-router-dom";
 import { Nav } from "./components/Nav.js";
 import { Assets } from "./routes/Assets.js";
 import { AuthCallback } from "./routes/AuthCallback.js";
-import { AppendData } from "./routes/AppendData.js";
 import { Compute } from "./routes/Compute.js";
 import { Data } from "./routes/Data.js";
 import { DelegateData } from "./routes/DelegateData.js";
@@ -33,7 +32,6 @@ export function App() {
           <Route path="/compute" element={<Compute />} />
           <Route path="/data" element={<Data />} />
           <Route path="/delegate-data" element={<DelegateData />} />
-          <Route path="/append-data" element={<AppendData />} />
           <Route path="/assets" element={<Assets />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -9,10 +9,48 @@
 
 import { useEffect, useState } from "react";
 
-import type { MintedMandate, OwnedMandate, Scope } from "@aithos/sdk";
+import {
+  createAppendDataClient,
+  createDataClient,
+  createDelegateDataClient,
+  type MintedMandate,
+  type OwnedMandate,
+  type Scope,
+} from "@aithos/sdk";
+import {
+  bytesToHex,
+  ed25519PublicKeyToMultibase,
+  generateKeyPair,
+  signMandate,
+} from "@aithos/protocol-client";
 
+import {
+  demoBrowserIdentity,
+  loadOrCreateDemoIdentity,
+} from "../demo-identity.js";
+import { notesV1Lite } from "../schemas/notes.js";
 import { useSdk } from "../sdk-context.js";
 import { formatError } from "./Home.js";
+
+// Vendor (app-defined) schemas the demo collections use. The SDK needs
+// these to split indexable metadata vs encrypted payload on read — both
+// the owner client and the delegate client must carry them, otherwise
+// `_ensureCollection` throws "schema not known to the SDK". Core schemas
+// (e.g. aithos.contacts.v1) are bundled and need not be listed.
+const DEMO_SCHEMAS = [notesV1Lite];
+
+const PDS_URL =
+  (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
+    import.meta.env.VITE_AITHOS_PDS_URL) ||
+  "https://slpknok0md.execute-api.eu-west-3.amazonaws.com";
+
+// read/write/admin are hierarchical (write ⊃ read, admin ⊃ write). `append`
+// is LATERAL: insert-only, grants NO read — not even read. A mandate carrying
+// only `data.<col>.append` can add records but cannot get/list/update/delete,
+// and its holder cannot decrypt anything (the DEK is sealed to the owner key,
+// never the CMK — so we deliberately do NOT call authorizeDelegate for it).
+const DATA_ACTIONS = ["read", "write", "admin", "append"] as const;
+type DataAction = (typeof DATA_ACTIONS)[number];
 
 const ALL_SCOPES: readonly Scope[] = [
   "ethos.read.public",
@@ -81,6 +119,24 @@ export function Mandates() {
         <CreateMandateForm
           onCreated={() => setRefreshTick((t) => t + 1)}
         />
+      </section>
+
+      <section>
+        <h2>Data collection mandate</h2>
+        <p className="lede">
+          Grant a delegate access to one of your <strong>data collections</strong>{" "}
+          (the ones created on <code>/data</code>, under the shared demo{" "}
+          <code>did:key</code>). Pick a collection and an action —{" "}
+          <code>read</code> / <code>write</code> / <code>admin</code> (hierarchical,
+          CMK re-wrapped via <code>authorizeDelegate</code>), or{" "}
+          <code>append</code> (<strong>lateral, insert-only, no read</strong>:{" "}
+          no CMK wrap; the grantee seals each record to your key and cannot read
+          the collection, not even read). Mints a{" "}
+          <code>data.&lt;collection&gt;.&lt;action&gt;</code> mandate and gives
+          you an importable bundle. For append, the result proves it inline:
+          the grantee inserts a record, and a read attempt is rejected.
+        </p>
+        <DataMandateForm />
       </section>
 
       <section>
@@ -240,6 +296,289 @@ function CreateMandateForm({
             download={minted.filename}
           >
             Download {minted.filename}
+          </a>
+        </div>
+      )}
+    </form>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Data collection mandate                                                   */
+/* -------------------------------------------------------------------------- */
+
+interface DataMandateResult {
+  readonly mandateId: string;
+  readonly scope: string;
+  readonly bundleUrl: string;
+  readonly filename: string;
+  readonly verifiedReadCount: number | null;
+  /** Present for append mandates: proof of insert-only + no-read. */
+  readonly append?: {
+    readonly insertedRecordId: string;
+    readonly readBlocked: boolean;
+  };
+}
+
+function DataMandateForm() {
+  const [collections, setCollections] = useState<readonly string[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>("");
+  const [action, setAction] = useState<DataAction>("read");
+  const [ttlSeconds, setTtlSeconds] = useState(86400);
+  const [granteeLabel, setGranteeLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<DataMandateResult | null>(null);
+
+  // List the demo did:key's collections on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const id = loadOrCreateDemoIdentity();
+        const client = createDataClient({
+          pdsUrl: PDS_URL,
+          did: id.did,
+          sphereSeed: id.seed,
+          verificationMethod: id.verificationMethod,
+          schemas: DEMO_SCHEMAS,
+        });
+        const cols = await client.listCollections();
+        if (cancelled) return;
+        const names = cols.map((c) => c.name);
+        setCollections(names);
+        if (names.length > 0) setSelected((s) => s || names[0]!);
+      } catch (e) {
+        if (!cancelled) setLoadError(formatError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const id = loadOrCreateDemoIdentity();
+      const ownerClient = createDataClient({
+        pdsUrl: PDS_URL,
+        did: id.did,
+        sphereSeed: id.seed,
+        verificationMethod: id.verificationMethod,
+        schemas: DEMO_SCHEMAS,
+      });
+
+      // Fresh grantee keypair (the delegate). Its seed travels only in the
+      // downloadable bundle.
+      const granteeKp = generateKeyPair();
+      const granteeMb = ed25519PublicKeyToMultibase(granteeKp.publicKey);
+      const scope = `data.${selected}.${action}`;
+
+      const mandate = signMandate({
+        issuer: demoBrowserIdentity(id, "data-owner") as never,
+        actorSphere: "self",
+        grantee: {
+          id: `did:key:${granteeMb}`,
+          ...(granteeLabel ? { label: granteeLabel } : {}),
+          pubkey: granteeMb,
+        },
+        scopes: [scope],
+        ttlSeconds,
+      });
+
+      // Importable bundle (same shape as sdk.mandates.create / mintDelegateBundle).
+      const bundle = {
+        aithos_delegate_version: "0.1.0",
+        mandate,
+        delegate_seed_hex: bytesToHex(granteeKp.seed),
+      };
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+        type: "application/json",
+      });
+      const bundleUrl = URL.createObjectURL(blob);
+      const filename = `${selected}-${action}.aithos-delegate.json`;
+
+      if (action === "append") {
+        // APPEND: lateral, insert-only, no read. Do NOT authorizeDelegate —
+        // an append holder must never receive the CMK (that would grant read).
+        // It seals each DEK to the owner's pubkey instead.
+        const appendClient = createAppendDataClient({
+          pdsUrl: PDS_URL,
+          subjectDid: id.did,
+          // did:key encodes the owner's Ed25519 pubkey after the prefix.
+          ownerDataPubkeyMultibase: id.did.replace(/^did:key:/, ""),
+          mandate,
+          delegateSeed: granteeKp.seed,
+          schema: notesV1Lite,
+        });
+        // Proof 1 — the grantee CAN insert.
+        const insertedRecordId = await appendClient
+          .collection(selected)
+          .insert({ title: "Append deposit", content: "deposited via append mandate" });
+
+        // Proof 2 — the grantee CANNOT read (PDS rejects: append grants no read).
+        let readBlocked = false;
+        try {
+          const asReader = createDelegateDataClient({
+            pdsUrl: PDS_URL,
+            subjectDid: id.did,
+            mandate,
+            delegateSeed: granteeKp.seed,
+            schemas: DEMO_SCHEMAS,
+          });
+          await asReader.collection(selected).list({ limit: 1 });
+        } catch {
+          readBlocked = true;
+        }
+
+        setResult({
+          mandateId: mandate.id,
+          scope,
+          bundleUrl,
+          filename,
+          verifiedReadCount: null,
+          append: { insertedRecordId, readBlocked },
+        });
+        return;
+      }
+
+      // read / write / admin: re-wrap the collection CMK to the grantee so the
+      // mandate is usable for reading.
+      await ownerClient.authorizeDelegate({ collectionName: selected, mandate });
+
+      // Inline proof: read as the delegate right now.
+      let verifiedReadCount: number | null = null;
+      try {
+        const delegateClient = createDelegateDataClient({
+          pdsUrl: PDS_URL,
+          subjectDid: id.did,
+          mandate,
+          delegateSeed: granteeKp.seed,
+          schemas: DEMO_SCHEMAS,
+        });
+        const r = await delegateClient.collection(selected).list({ limit: 50 });
+        verifiedReadCount = r.items.length;
+      } catch {
+        verifiedReadCount = null;
+      }
+
+      setResult({
+        mandateId: mandate.id,
+        scope,
+        bundleUrl,
+        filename,
+        verifiedReadCount,
+      });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loadError) {
+    return <div className="error">Couldn&rsquo;t list collections: {loadError}</div>;
+  }
+  if (collections === null) {
+    return <p>Loading collections…</p>;
+  }
+  if (collections.length === 0) {
+    return (
+      <p className="lede">
+        No collections yet under the demo identity. Create one on{" "}
+        <code>/data</code> first, then come back.
+      </p>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <label>
+        <span>Collection</span>
+        <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+          {collections.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Action</span>
+        <select
+          value={action}
+          onChange={(e) => setAction(e.target.value as DataAction)}
+        >
+          {DATA_ACTIONS.map((a) => (
+            <option key={a} value={a}>
+              {a}
+              {a === "read" ? "" : a === "append" ? " (insert-only, no read)" : " (implies read)"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Grantee label (optional)</span>
+        <input
+          type="text"
+          value={granteeLabel}
+          onChange={(e) => setGranteeLabel(e.target.value)}
+          placeholder="e.g. psy, accountant agent…"
+        />
+      </label>
+      <label>
+        <span>TTL</span>
+        <select
+          value={ttlSeconds}
+          onChange={(e) => setTtlSeconds(Number(e.target.value))}
+        >
+          {TTL_PRESETS.map((p) => (
+            <option key={p.seconds} value={p.seconds}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="row">
+        <button type="submit" disabled={busy || !selected}>
+          {busy ? "Creating…" : "Create data mandate"}
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {result && (
+        <div className="success">
+          Created <code>{result.mandateId}</code> · scope{" "}
+          <code>{result.scope}</code>.{" "}
+          {result.verifiedReadCount !== null && (
+            <>
+              Verified: delegate read returned{" "}
+              <strong>{result.verifiedReadCount}</strong> record
+              {result.verifiedReadCount === 1 ? "" : "s"}.{" "}
+            </>
+          )}
+          {result.append && (
+            <>
+              Verified: grantee inserted{" "}
+              <code>{result.append.insertedRecordId.slice(0, 16)}…</code>, and a
+              read attempt was{" "}
+              <strong>
+                {result.append.readBlocked ? "blocked by the PDS ✓" : "NOT blocked ✗"}
+              </strong>{" "}
+              (append grants no read).{" "}
+            </>
+          )}
+          <a href={result.bundleUrl} download={result.filename}>
+            Download {result.filename}
           </a>
         </div>
       )}
