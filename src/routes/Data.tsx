@@ -31,7 +31,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  createAppendDataClient,
   createDataClient,
+  createDelegateDataClient,
   type DataClient,
   type DataCollection,
 } from "@aithos/sdk";
@@ -205,7 +207,217 @@ export function Data() {
       />
 
       <RecordsPanel client={client} activeCollection={activeCollection} />
+
+      <AppendMandateBrowser />
     </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Act as an APPEND mandate — the grantee's blind view                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Load a downloaded `data.<col>.append` bundle and act AS its grantee against
+ * the live PDS. This is the view the rest of /data can't give you: /data above
+ * always runs as the local owner did:key (decoupled from sign-in), so it shows
+ * everything. Here we use the bundle's delegate seed, so you experience the
+ * real restriction — you can append, but you cannot read the collection, not
+ * even the record you just appended (gamma-style). Only the owner can read it.
+ */
+function AppendMandateBrowser() {
+  interface Loaded {
+    readonly mandate: { id: string; issuer: string; scopes: string[]; grantee: { pubkey?: string } };
+    readonly seed: Uint8Array;
+    readonly collectionName: string;
+    readonly subjectDid: string;
+    readonly ownerPubMb: string;
+  }
+
+  const [bundleText, setBundleText] = useState("");
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+
+  const [readState, setReadState] = useState<
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "blocked"; message: string }
+    | { kind: "visible"; count: number } // would be a BUG
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
+  const [addErr, setAddErr] = useState<string | null>(null);
+
+  const load = () => {
+    setParseError(null);
+    setLoaded(null);
+    setReadState({ kind: "idle" });
+    setAddMsg(null);
+    setAddErr(null);
+    try {
+      const b = JSON.parse(bundleText) as {
+        mandate?: Loaded["mandate"];
+        delegate_seed_hex?: string;
+      };
+      if (!b.mandate || !b.delegate_seed_hex) {
+        throw new Error("not an aithos delegate bundle (missing mandate / delegate_seed_hex)");
+      }
+      const scope = (b.mandate.scopes ?? []).find((s) => /^data\.[^.]+\.append$/.test(s));
+      if (!scope) {
+        throw new Error("this bundle has no data.<collection>.append scope");
+      }
+      const collectionName = scope.split(".")[1]!;
+      const subjectDid = b.mandate.issuer;
+      const ownerPubMb = subjectDid.replace(/^did:key:/, "");
+      const seed = hexToBytes(b.delegate_seed_hex);
+      const next: Loaded = { mandate: b.mandate, seed, collectionName, subjectDid, ownerPubMb };
+      setLoaded(next);
+      void checkRead(next);
+    } catch (e) {
+      setParseError(formatError(e));
+    }
+  };
+
+  // Try to READ the collection as the grantee — expected to be blocked.
+  async function checkRead(l: Loaded) {
+    setReadState({ kind: "checking" });
+    try {
+      const reader = createDelegateDataClient({
+        pdsUrl: PDS_URL,
+        subjectDid: l.subjectDid,
+        mandate: l.mandate as never,
+        delegateSeed: l.seed,
+        schemas: [notesV1Lite],
+      });
+      const r = await reader.collection(l.collectionName).list({ limit: 50 });
+      // If this succeeds, append leaked read — that's a bug worth surfacing.
+      setReadState({ kind: "visible", count: r.items.length });
+    } catch (e) {
+      setReadState({ kind: "blocked", message: formatError(e) });
+    }
+  }
+
+  const append = async () => {
+    if (!loaded || !title.trim()) return;
+    setBusy(true);
+    setAddMsg(null);
+    setAddErr(null);
+    try {
+      const appendClient = createAppendDataClient({
+        pdsUrl: PDS_URL,
+        subjectDid: loaded.subjectDid,
+        ownerDataPubkeyMultibase: loaded.ownerPubMb,
+        mandate: loaded.mandate as never,
+        delegateSeed: loaded.seed,
+        schema: notesV1Lite,
+      });
+      const id = await appendClient
+        .collection(loaded.collectionName)
+        .insert({ title: title.trim(), ...(content ? { content } : {}) });
+      setAddMsg(`Appended ${id}. You still can't read it — only the owner can.`);
+      setTitle("");
+      setContent("");
+    } catch (e) {
+      setAddErr(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section>
+      <h2>Act as an append mandate</h2>
+      <p className="lede">
+        Paste a downloaded <code>data.&lt;collection&gt;.append</code> bundle to
+        act as its grantee against the live PDS. Unlike the owner playground
+        above, here you get the <strong>real</strong> append experience: you can
+        add a record, but reading the collection is refused — you can&rsquo;t see
+        existing records, not even your own deposit. Only the owner can read it.
+      </p>
+      <label>
+        <span>Append bundle (.aithos-delegate.json)</span>
+        <textarea
+          value={bundleText}
+          onChange={(e) => setBundleText(e.target.value)}
+          placeholder='{ "aithos_delegate_version": "0.1.0", "mandate": { … "scopes": ["data.test.append"] }, "delegate_seed_hex": "…" }'
+          rows={5}
+        />
+      </label>
+      <div className="row">
+        <button type="button" onClick={load} disabled={!bundleText.trim()}>
+          Load mandate
+        </button>
+      </div>
+      {parseError && <div className="error">{parseError}</div>}
+
+      {loaded && (
+        <>
+          <dl className="kvtable" style={{ marginTop: 12 }}>
+            <dt>Acting as grantee</dt>
+            <dd>
+              <code>{loaded.mandate.grantee.pubkey?.slice(0, 20)}…</code>
+            </dd>
+            <dt>Collection</dt>
+            <dd>
+              <code>{loaded.collectionName}</code> (owner{" "}
+              <code>{loaded.subjectDid.slice(0, 20)}…</code>)
+            </dd>
+            <dt>Read access</dt>
+            <dd>
+              {readState.kind === "checking" && <em>Checking…</em>}
+              {readState.kind === "blocked" && (
+                <strong>🔒 Blocked — no read access (append grants no read). You cannot see the collection.</strong>
+              )}
+              {readState.kind === "visible" && (
+                <span className="error" style={{ display: "inline" }}>
+                  ⚠️ Unexpected: read returned {readState.count} record(s) — append should NOT grant read.
+                </span>
+              )}
+              {readState.kind === "error" && (
+                <span className="error" style={{ display: "inline" }}>{readState.message}</span>
+              )}
+            </dd>
+          </dl>
+
+          {/* No record list is rendered — by design, the grantee can't read. */}
+
+          <form
+            className="stack"
+            style={{ marginTop: 12 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void append();
+            }}
+          >
+            <h3>New note (append-only)</h3>
+            <label>
+              <span>Title *</span>
+              <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </label>
+            <label>
+              <span>Content (encrypted, sealed to the owner)</span>
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                rows={4}
+                placeholder="Only the owner will ever be able to read this."
+              />
+            </label>
+            <div className="row">
+              <button type="submit" disabled={busy || !title.trim()}>
+                {busy ? "Appending…" : "Append"}
+              </button>
+            </div>
+            {addMsg && <div className="success">{addMsg}</div>}
+            {addErr && <div className="error">{addErr}</div>}
+          </form>
+        </>
+      )}
+    </section>
   );
 }
 
