@@ -9,10 +9,34 @@
 
 import { useEffect, useState } from "react";
 
-import type { MintedMandate, OwnedMandate, Scope } from "@aithos/sdk";
+import {
+  createDataClient,
+  createDelegateDataClient,
+  type MintedMandate,
+  type OwnedMandate,
+  type Scope,
+} from "@aithos/sdk";
+import {
+  bytesToHex,
+  ed25519PublicKeyToMultibase,
+  generateKeyPair,
+  signMandate,
+} from "@aithos/protocol-client";
 
+import {
+  demoBrowserIdentity,
+  loadOrCreateDemoIdentity,
+} from "../demo-identity.js";
 import { useSdk } from "../sdk-context.js";
 import { formatError } from "./Home.js";
+
+const PDS_URL =
+  (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
+    import.meta.env.VITE_AITHOS_PDS_URL) ||
+  "https://slpknok0md.execute-api.eu-west-3.amazonaws.com";
+
+const DATA_ACTIONS = ["read", "write", "admin"] as const;
+type DataAction = (typeof DATA_ACTIONS)[number];
 
 const ALL_SCOPES: readonly Scope[] = [
   "ethos.read.public",
@@ -81,6 +105,21 @@ export function Mandates() {
         <CreateMandateForm
           onCreated={() => setRefreshTick((t) => t + 1)}
         />
+      </section>
+
+      <section>
+        <h2>Data collection mandate</h2>
+        <p className="lede">
+          Grant a delegate read/write access to one of your <strong>data
+          collections</strong> (the ones created on <code>/data</code>, under
+          the shared demo <code>did:key</code>). Picks a collection, mints a{" "}
+          <code>data.&lt;collection&gt;.&lt;action&gt;</code> mandate signed by
+          that identity, re-wraps the collection key to the grantee
+          (<code>authorizeDelegate</code>), and gives you an importable bundle.
+          The mandate issuer is the collection owner — required for{" "}
+          <code>authorize_app</code>.
+        </p>
+        <DataMandateForm />
       </section>
 
       <section>
@@ -240,6 +279,223 @@ function CreateMandateForm({
             download={minted.filename}
           >
             Download {minted.filename}
+          </a>
+        </div>
+      )}
+    </form>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Data collection mandate                                                   */
+/* -------------------------------------------------------------------------- */
+
+interface DataMandateResult {
+  readonly mandateId: string;
+  readonly scope: string;
+  readonly bundleUrl: string;
+  readonly filename: string;
+  readonly verifiedReadCount: number | null;
+}
+
+function DataMandateForm() {
+  const [collections, setCollections] = useState<readonly string[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>("");
+  const [action, setAction] = useState<DataAction>("read");
+  const [ttlSeconds, setTtlSeconds] = useState(86400);
+  const [granteeLabel, setGranteeLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<DataMandateResult | null>(null);
+
+  // List the demo did:key's collections on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const id = loadOrCreateDemoIdentity();
+        const client = createDataClient({
+          pdsUrl: PDS_URL,
+          did: id.did,
+          sphereSeed: id.seed,
+          verificationMethod: id.verificationMethod,
+        });
+        const cols = await client.listCollections();
+        if (cancelled) return;
+        const names = cols.map((c) => c.name);
+        setCollections(names);
+        if (names.length > 0) setSelected((s) => s || names[0]!);
+      } catch (e) {
+        if (!cancelled) setLoadError(formatError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const id = loadOrCreateDemoIdentity();
+      const ownerClient = createDataClient({
+        pdsUrl: PDS_URL,
+        did: id.did,
+        sphereSeed: id.seed,
+        verificationMethod: id.verificationMethod,
+      });
+
+      // Fresh grantee keypair (the delegate). Its seed travels only in the
+      // downloadable bundle.
+      const granteeKp = generateKeyPair();
+      const granteeMb = ed25519PublicKeyToMultibase(granteeKp.publicKey);
+      const scope = `data.${selected}.${action}`;
+
+      const mandate = signMandate({
+        issuer: demoBrowserIdentity(id, "data-owner") as never,
+        actorSphere: "self",
+        grantee: {
+          id: `did:key:${granteeMb}`,
+          ...(granteeLabel ? { label: granteeLabel } : {}),
+          pubkey: granteeMb,
+        },
+        scopes: [scope],
+        ttlSeconds,
+      });
+
+      // Re-wrap the collection CMK to the grantee so the mandate is usable.
+      await ownerClient.authorizeDelegate({ collectionName: selected, mandate });
+
+      // Importable bundle (same shape as sdk.mandates.create / mintDelegateBundle).
+      const bundle = {
+        aithos_delegate_version: "0.1.0",
+        mandate,
+        delegate_seed_hex: bytesToHex(granteeKp.seed),
+      };
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+        type: "application/json",
+      });
+      const bundleUrl = URL.createObjectURL(blob);
+
+      // Inline proof: read as the delegate right now.
+      let verifiedReadCount: number | null = null;
+      try {
+        const delegateClient = createDelegateDataClient({
+          pdsUrl: PDS_URL,
+          subjectDid: id.did,
+          mandate,
+          delegateSeed: granteeKp.seed,
+        });
+        const r = await delegateClient.collection(selected).list({ limit: 50 });
+        verifiedReadCount = r.items.length;
+      } catch {
+        verifiedReadCount = null;
+      }
+
+      setResult({
+        mandateId: mandate.id,
+        scope,
+        bundleUrl,
+        filename: `${selected}-${action}.aithos-delegate.json`,
+        verifiedReadCount,
+      });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loadError) {
+    return <div className="error">Couldn&rsquo;t list collections: {loadError}</div>;
+  }
+  if (collections === null) {
+    return <p>Loading collections…</p>;
+  }
+  if (collections.length === 0) {
+    return (
+      <p className="lede">
+        No collections yet under the demo identity. Create one on{" "}
+        <code>/data</code> first, then come back.
+      </p>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <label>
+        <span>Collection</span>
+        <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+          {collections.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Action</span>
+        <select
+          value={action}
+          onChange={(e) => setAction(e.target.value as DataAction)}
+        >
+          {DATA_ACTIONS.map((a) => (
+            <option key={a} value={a}>
+              {a} {a === "read" ? "" : "(implies read)"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Grantee label (optional)</span>
+        <input
+          type="text"
+          value={granteeLabel}
+          onChange={(e) => setGranteeLabel(e.target.value)}
+          placeholder="e.g. psy, accountant agent…"
+        />
+      </label>
+      <label>
+        <span>TTL</span>
+        <select
+          value={ttlSeconds}
+          onChange={(e) => setTtlSeconds(Number(e.target.value))}
+        >
+          {TTL_PRESETS.map((p) => (
+            <option key={p.seconds} value={p.seconds}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="row">
+        <button type="submit" disabled={busy || !selected}>
+          {busy ? "Creating…" : "Create data mandate"}
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {result && (
+        <div className="success">
+          Created <code>{result.mandateId}</code> · scope{" "}
+          <code>{result.scope}</code>.{" "}
+          {result.verifiedReadCount !== null && (
+            <>
+              Verified: delegate read returned{" "}
+              <strong>{result.verifiedReadCount}</strong> record
+              {result.verifiedReadCount === 1 ? "" : "s"}.{" "}
+            </>
+          )}
+          <a href={result.bundleUrl} download={result.filename}>
+            Download {result.filename}
           </a>
         </div>
       )}

@@ -8,6 +8,7 @@ import { Assets } from "./routes/Assets.js";
 import { AuthCallback } from "./routes/AuthCallback.js";
 import { Compute } from "./routes/Compute.js";
 import { Data } from "./routes/Data.js";
+import { DelegateData } from "./routes/DelegateData.js";
 import { Home } from "./routes/Home.js";
 import { Mandates } from "./routes/Mandates.js";
 import { Profile } from "./routes/Profile.js";
@@ -30,6 +31,7 @@ export function App() {
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/compute" element={<Compute />} />
           <Route path="/data" element={<Data />} />
+          <Route path="/delegate-data" element={<DelegateData />} />
           <Route path="/assets" element={<Assets />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
