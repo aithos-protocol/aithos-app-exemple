@@ -312,6 +312,8 @@ interface DataMandateResult {
   readonly scope: string;
   readonly bundleUrl: string;
   readonly filename: string;
+  /** The importable bundle object — also used to send it by magic link. */
+  readonly bundleObject: Record<string, unknown>;
   readonly verifiedReadCount: number | null;
   /** Present for append mandates: proof of insert-only + no-read. */
   readonly append?: {
@@ -455,6 +457,7 @@ function DataMandateForm() {
           scope,
           bundleUrl,
           filename,
+          bundleObject: bundle,
           verifiedReadCount: null,
           append: { insertedRecordId, ownDepositReadBlocked, ownerCanRead },
         });
@@ -486,6 +489,7 @@ function DataMandateForm() {
         scope,
         bundleUrl,
         filename,
+        bundleObject: bundle,
         verifiedReadCount,
       });
     } catch (e) {
@@ -605,9 +609,74 @@ function DataMandateForm() {
           <a href={result.bundleUrl} download={result.filename}>
             Download {result.filename}
           </a>
+          <InviteByEmail bundleObject={result.bundleObject} />
         </div>
       )}
     </form>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Invite by magic link — deliver the minted bundle to an email             */
+/* -------------------------------------------------------------------------- */
+
+function InviteByEmail({
+  bundleObject,
+}: {
+  readonly bundleObject: Record<string, unknown>;
+}) {
+  const { auth } = useSdk();
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const send = async () => {
+    setBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      // Generic SDK call — works for ANY mandate scope. The bundle (with its
+      // delegate seed) is stored server-side bound to a single-use token; only
+      // the token rides the email. The invitee redeems it on /auth/invite.
+      const r = await auth.inviteCustodial({ email, mandateBundle: bundleObject });
+      setMsg(
+        `Magic link ${r.mailSent ? "sent" : "queued (mail not sent — check SES)"} to ${r.email}.`,
+      );
+      setEmail("");
+    } catch (e) {
+      setErr(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <span style={{ display: "block", marginBottom: 4, color: "var(--muted)" }}>
+        …or send it by magic link (the mandate never rides the URL):
+      </span>
+      <form
+        className="row"
+        style={{ gap: 8 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send();
+        }}
+      >
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="patient@example.com"
+        />
+        <button type="submit" disabled={busy || !email}>
+          {busy ? "Sending…" : "Send magic link"}
+        </button>
+      </form>
+      {msg && <div className="success" style={{ marginTop: 6 }}>{msg}</div>}
+      {err && <div className="error" style={{ marginTop: 6 }}>{err}</div>}
+    </div>
   );
 }
 

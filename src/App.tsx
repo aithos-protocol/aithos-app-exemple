@@ -6,6 +6,7 @@ import { Route, Routes } from "react-router-dom";
 import { Nav } from "./components/Nav.js";
 import { Assets } from "./routes/Assets.js";
 import { AuthCallback } from "./routes/AuthCallback.js";
+import { AcceptInvite } from "./routes/AcceptInvite.js";
 import { Compute } from "./routes/Compute.js";
 import { Data } from "./routes/Data.js";
 import { DelegateData } from "./routes/DelegateData.js";
@@ -26,6 +27,7 @@ export function App() {
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/auth/reset" element={<ResetPassword />} />
           <Route path="/auth/verify" element={<VerifyEmail />} />
+          <Route path="/auth/invite" element={<AcceptInvite />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/mandates" element={<Mandates />} />
           <Route path="/wallet" element={<Wallet />} />
