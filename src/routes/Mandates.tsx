@@ -27,8 +27,16 @@ import {
   demoBrowserIdentity,
   loadOrCreateDemoIdentity,
 } from "../demo-identity.js";
+import { notesV1Lite } from "../schemas/notes.js";
 import { useSdk } from "../sdk-context.js";
 import { formatError } from "./Home.js";
+
+// Vendor (app-defined) schemas the demo collections use. The SDK needs
+// these to split indexable metadata vs encrypted payload on read — both
+// the owner client and the delegate client must carry them, otherwise
+// `_ensureCollection` throws "schema not known to the SDK". Core schemas
+// (e.g. aithos.contacts.v1) are bundled and need not be listed.
+const DEMO_SCHEMAS = [notesV1Lite];
 
 const PDS_URL =
   (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
@@ -320,6 +328,7 @@ function DataMandateForm() {
           did: id.did,
           sphereSeed: id.seed,
           verificationMethod: id.verificationMethod,
+          schemas: DEMO_SCHEMAS,
         });
         const cols = await client.listCollections();
         if (cancelled) return;
@@ -346,6 +355,7 @@ function DataMandateForm() {
         did: id.did,
         sphereSeed: id.seed,
         verificationMethod: id.verificationMethod,
+        schemas: DEMO_SCHEMAS,
       });
 
       // Fresh grantee keypair (the delegate). Its seed travels only in the
@@ -388,6 +398,7 @@ function DataMandateForm() {
           subjectDid: id.did,
           mandate,
           delegateSeed: granteeKp.seed,
+          schemas: DEMO_SCHEMAS,
         });
         const r = await delegateClient.collection(selected).list({ limit: 50 });
         verifiedReadCount = r.items.length;
