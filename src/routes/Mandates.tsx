@@ -316,7 +316,10 @@ interface DataMandateResult {
   /** Present for append mandates: proof of insert-only + no-read. */
   readonly append?: {
     readonly insertedRecordId: string;
-    readonly readBlocked: boolean;
+    /** Grantee cannot even re-read the record it just appended. */
+    readonly ownDepositReadBlocked: boolean;
+    /** The owner, by contrast, CAN read the deposit (by design, like gamma). */
+    readonly ownerCanRead: boolean;
   };
 }
 
@@ -420,8 +423,10 @@ function DataMandateForm() {
           .collection(selected)
           .insert({ title: "Append deposit", content: "deposited via append mandate" });
 
-        // Proof 2 — the grantee CANNOT read (PDS rejects: append grants no read).
-        let readBlocked = false;
+        // Proof 2 — the grantee cannot even SEE the record it just appended.
+        // (gamma-style: append grants no read at all.) We try to re-read that
+        // exact record id through a delegate read client → PDS rejects -32042.
+        let ownDepositReadBlocked = false;
         try {
           const asReader = createDelegateDataClient({
             pdsUrl: PDS_URL,
@@ -430,9 +435,19 @@ function DataMandateForm() {
             delegateSeed: granteeKp.seed,
             schemas: DEMO_SCHEMAS,
           });
-          await asReader.collection(selected).list({ limit: 1 });
+          await asReader.collection(selected).get(insertedRecordId);
         } catch {
-          readBlocked = true;
+          ownDepositReadBlocked = true;
+        }
+
+        // Proof 3 — the OWNER, by contrast, can read the deposit (by design:
+        // the practitioner reads what the patient deposited).
+        let ownerCanRead = false;
+        try {
+          const got = await ownerClient.collection(selected).get(insertedRecordId);
+          ownerCanRead = !!got;
+        } catch {
+          ownerCanRead = false;
         }
 
         setResult({
@@ -441,7 +456,7 @@ function DataMandateForm() {
           bundleUrl,
           filename,
           verifiedReadCount: null,
-          append: { insertedRecordId, readBlocked },
+          append: { insertedRecordId, ownDepositReadBlocked, ownerCanRead },
         });
         return;
       }
@@ -568,13 +583,23 @@ function DataMandateForm() {
           )}
           {result.append && (
             <>
-              Verified: grantee inserted{" "}
-              <code>{result.append.insertedRecordId.slice(0, 16)}…</code>, and a
-              read attempt was{" "}
+              <br />
+              Grantee appended <code>{result.append.insertedRecordId.slice(0, 16)}…</code> ✓
+              <br />
+              Grantee re-reading its own deposit →{" "}
               <strong>
-                {result.append.readBlocked ? "blocked by the PDS ✓" : "NOT blocked ✗"}
-              </strong>{" "}
-              (append grants no read).{" "}
+                {result.append.ownDepositReadBlocked
+                  ? "blocked ✓ (can't even see what it appended)"
+                  : "NOT blocked ✗"}
+              </strong>
+              <br />
+              Owner reading the same deposit →{" "}
+              <strong>
+                {result.append.ownerCanRead
+                  ? "visible ✓ (owner reads it, like gamma)"
+                  : "NOT visible ✗"}
+              </strong>
+              <br />
             </>
           )}
           <a href={result.bundleUrl} download={result.filename}>
