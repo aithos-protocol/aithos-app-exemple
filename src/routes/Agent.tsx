@@ -10,7 +10,7 @@
 // An owner calls direct; a delegate's calls carry its mandate id automatically.
 // Only the zones the actor may read are offered for the working-set.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { RunConversationResult } from "@aithos/sdk";
 
@@ -39,10 +39,9 @@ export function Agent() {
 
   const readableZones = useMemo(() => ALL_ZONES.filter((z) => cap.ethosRead(z)), [cap]);
   const [zones, setZones] = useState<ZoneName[]>([]);
-  // Default the working-set to the readable zones once we know them.
-  useMemo(() => {
-    if (zones.length === 0 && readableZones.length > 0) setZones([readableZones[0]!]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Default the working-set to the first readable zone once we know them.
+  useEffect(() => {
+    setZones((cur) => (cur.length === 0 && readableZones.length > 0 ? [readableZones[0]!] : cur));
   }, [readableZones]);
 
   if (!actor || !cap.canCompute) {

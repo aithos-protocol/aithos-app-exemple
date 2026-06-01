@@ -229,12 +229,19 @@ function CreateMandateForm() {
                   }
                 >
                   <option value="none">no access</option>
-                  {DATA_ACTIONS.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                      {a === "append" ? " (insert-only)" : a === "read" ? "" : " (implies read)"}
-                    </option>
-                  ))}
+                  {DATA_ACTIONS.map((a) => {
+                    // Only `read` yields a fully working delegate experience in
+                    // this build: the SDK's delegate data client is read-only,
+                    // and the delegate UI doesn't expose append insert yet. Grey
+                    // write/admin/append as v0.2 so we don't mislead the issuer.
+                    const disabled = a !== "read";
+                    return (
+                      <option key={a} value={a} disabled={disabled}>
+                        {a}
+                        {a === "read" ? "" : " (v0.2 — soon)"}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             ))}
