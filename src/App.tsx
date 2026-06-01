@@ -6,6 +6,7 @@ import { Route, Routes } from "react-router-dom";
 import { Nav } from "./components/Nav.js";
 import { DataPage } from "./routes/Data.js";
 import { Home } from "./routes/Home.js";
+import { Mandates } from "./routes/Mandates.js";
 import { Profile } from "./routes/Profile.js";
 
 export function App() {
@@ -17,7 +18,7 @@ export function App() {
           <Route path="/" element={<Home />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/data" element={<DataPage />} />
-          <Route path="/mandates" element={<Stub name="Mandates" />} />
+          <Route path="/mandates" element={<Mandates />} />
           <Route path="/compute" element={<Stub name="Compute" />} />
           <Route path="/wallet" element={<Stub name="Wallet" />} />
           <Route path="/assets" element={<Stub name="Assets" />} />
