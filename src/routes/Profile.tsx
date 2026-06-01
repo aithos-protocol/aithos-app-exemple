@@ -7,11 +7,16 @@
 //   - delegate : sdk.ethos.of(subjectDid). Only the zones the mandate grants
 //                are shown; write controls appear only with ethos.write.<zone>.
 //
-// The "authorized vs. decryptable" nuance is surfaced honestly: a delegate may
-// hold ethos.read.circle yet still fail to decrypt if the owner never sealed
-// the zone to them at publish time. We show the scope as granted, then report
-// the actual read result (and tell the delegate to ask the owner to publish
-// the zone once).
+// IMPORTANT — staging model: the EthosClient holds an in-memory buffer of
+// pending changes (addSection/updateSection/deleteSection) until publish().
+// We therefore build the client ONCE per (actor kind + subject) and keep it
+// stable for the whole page lifetime — rebuilding it (e.g. on an unrelated
+// context bump) would silently discard staged edits. Re-renders after a stage
+// are driven by a LOCAL `rev` counter, never by the global actor bump.
+//
+// The "authorized vs. decryptable" nuance is surfaced: a delegate may hold
+// ethos.read.circle yet fail to decrypt if the owner never sealed the zone to
+// them at publish time.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -26,12 +31,12 @@ export function Profile() {
   const { actor, capabilities: cap, getEthosClient } = useActor();
   const [client, setClient] = useState<EthosClient | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  // Local re-render trigger: bumped after every stage / publish so the editor
+  // and the publish bar re-read the client's pending buffer. NOT the context
+  // bump (which would rebuild the client and lose the buffer).
+  const [rev, setRev] = useState(0);
 
-  // Zones this actor may at least read.
-  const readableZones = useMemo(
-    () => ZONES.filter((z) => cap.ethosRead(z)),
-    [cap],
-  );
+  const readableZones = useMemo(() => ZONES.filter((z) => cap.ethosRead(z)), [cap]);
   const [zone, setZone] = useState<ZoneName>("public");
 
   useEffect(() => {
@@ -40,6 +45,8 @@ export function Profile() {
     }
   }, [readableZones, zone]);
 
+  // Build the EthosClient once per subject. Stable across context bumps.
+  const subjectKey = actor ? `${actor.kind}:${actor.subjectDid}` : null;
   useEffect(() => {
     if (!actor) {
       setClient(null);
@@ -47,6 +54,7 @@ export function Profile() {
     }
     let cancelled = false;
     setLoadErr(null);
+    setClient(null);
     getEthosClient()
       .then((c) => {
         if (!cancelled) setClient(c);
@@ -57,7 +65,9 @@ export function Profile() {
     return () => {
       cancelled = true;
     };
-  }, [actor, getEthosClient]);
+    // Intentionally keyed on the stable subject identity only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectKey]);
 
   if (!actor) {
     return (
@@ -74,8 +84,7 @@ export function Profile() {
         <h2>Profile</h2>
         <p className="warn">
           This {actor.kind} has no Ethos read scope. A delegate needs an{" "}
-          <code>ethos.read.&lt;zone&gt;</code> (or write) scope to see anything
-          here.
+          <code>ethos.read.&lt;zone&gt;</code> (or write) scope to see anything here.
         </p>
       </section>
     );
@@ -123,8 +132,12 @@ export function Profile() {
             zone={zone}
             canWrite={cap.ethosWrite(zone)}
             actorKind={actor.kind}
+            rev={rev}
+            onChanged={() => setRev((r) => r + 1)}
           />
-          {ZONES.some((z) => cap.ethosWrite(z)) && <PublishBar client={client} />}
+          {ZONES.some((z) => cap.ethosWrite(z)) && (
+            <PublishBar client={client} onChanged={() => setRev((r) => r + 1)} />
+          )}
         </>
       )}
     </section>
@@ -140,17 +153,19 @@ function ZoneEditor({
   zone,
   canWrite,
   actorKind,
+  rev,
+  onChanged,
 }: {
   readonly client: EthosClient;
   readonly zone: ZoneName;
   readonly canWrite: boolean;
   readonly actorKind: "owner" | "delegate";
+  readonly rev: number;
+  readonly onChanged: () => void;
 }) {
-  const { bump } = useActor();
   const [sections, setSections] = useState<readonly Section[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -159,8 +174,6 @@ function ZoneEditor({
       const list = await client.zone(zone).sections();
       setSections(list);
     } catch (e) {
-      // Authorized-but-undecryptable lands here for a delegate whose wrap was
-      // never sealed by the owner.
       setError(formatError(e));
       setSections(null);
     } finally {
@@ -168,9 +181,10 @@ function ZoneEditor({
     }
   }, [client, zone]);
 
+  // Re-read whenever the zone changes OR a stage/publish bumped `rev`.
   useEffect(() => {
     void refresh();
-  }, [refresh, tick]);
+  }, [refresh, rev]);
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -186,8 +200,7 @@ function ZoneEditor({
     setTitle("");
     setBody("");
     setTags("");
-    setTick((t) => t + 1);
-    bump();
+    onChanged();
   };
 
   return (
@@ -218,10 +231,7 @@ function ZoneEditor({
           zone={zone}
           client={client}
           canWrite={canWrite}
-          onChanged={() => {
-            setTick((t) => t + 1);
-            bump();
-          }}
+          onChanged={onChanged}
         />
       ))}
 
@@ -349,8 +359,13 @@ function SectionRow({
 /*  PublishBar                                                                */
 /* -------------------------------------------------------------------------- */
 
-function PublishBar({ client }: { readonly client: EthosClient }) {
-  const { bump } = useActor();
+function PublishBar({
+  client,
+  onChanged,
+}: {
+  readonly client: EthosClient;
+  readonly onChanged: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -386,7 +401,7 @@ function PublishBar({ client }: { readonly client: EthosClient }) {
               setSuccess(
                 `Published edition #${r.editionHeight} (zones: ${r.zonesPublished.join(", ")})`,
               );
-              bump();
+              onChanged();
             } catch (e) {
               setError(formatError(e));
             } finally {
@@ -401,7 +416,7 @@ function PublishBar({ client }: { readonly client: EthosClient }) {
           disabled={busy || pending.length === 0}
           onClick={() => {
             client.discard();
-            bump();
+            onChanged();
           }}
         >
           Discard

@@ -78,18 +78,20 @@ function DelegateDataView({
   readonly client: ReadonlyDataClient | null;
   readonly actor: Actor;
 }) {
-  const { collections, wildcard } = useMemo(() => {
+  const { collections, wildcard, hasWriteScope } = useMemo(() => {
     const names = new Set<string>();
     let wild = false;
+    let writeish = false;
     if (actor.kind === "delegate") {
       for (const s of actor.scopes) {
         const m = /^data\.([^.]+)\.(read|write|admin)$/.exec(s);
         if (!m) continue;
+        if (m[2] === "write" || m[2] === "admin") writeish = true;
         if (m[1] === "*") wild = true;
         else names.add(m[1]!);
       }
     }
-    return { collections: [...names], wildcard: wild };
+    return { collections: [...names], wildcard: wild, hasWriteScope: writeish };
   }, [actor]);
 
   return (
@@ -105,6 +107,17 @@ function DelegateDataView({
         <p className="lede">
           Your mandate carries a <code>data.*.read</code> wildcard — open the
           owner's collection by name below.
+        </p>
+      )}
+
+      {hasWriteScope && (
+        <p className="warn">
+          Your <code>write</code>/<code>admin</code> data scope grants{" "}
+          <strong>read</strong> here (the collection is decryptable). The current
+          SDK exposes delegate data <strong>mutation only via{" "}
+          <code>append</code></strong> (insert-only, sealed to the owner) — full
+          delegate update/delete is owner-only in v0.x. That's an SDK limit, not
+          a UI one.
         </p>
       )}
 
