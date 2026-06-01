@@ -44,6 +44,7 @@ const ZONES: readonly ZoneName[] = ["public", "circle", "self"];
 
 export function Mandates() {
   const { actor, capabilities: cap } = useActor();
+  const [refreshTick, setRefreshTick] = useState(0);
 
   if (!actor || !cap.canIssueMandates) {
     return (
@@ -68,9 +69,9 @@ export function Mandates() {
           re-wrapped to the grantee. Download the bundle and hand it over — the
           grantee imports it on Home.
         </p>
-        <CreateMandateForm />
+        <CreateMandateForm onCreated={() => setRefreshTick((t) => t + 1)} />
       </section>
-      <IssuedMandates />
+      <IssuedMandates refreshTick={refreshTick} />
     </>
   );
 }
@@ -89,8 +90,8 @@ interface Minted {
   }[];
 }
 
-function CreateMandateForm() {
-  const { sdk, dataClient, bump } = useActor();
+function CreateMandateForm({ onCreated }: { readonly onCreated: () => void }) {
+  const { sdk, dataClient } = useActor();
   const owner = dataClient as DataClient | null; // owner #data client (or null)
 
   const [granteeId, setGranteeId] = useState("urn:aithos:agent:demo1");
@@ -170,7 +171,7 @@ function CreateMandateForm() {
         }
       }
       setMinted({ mandate: r, dataAuth: [...dataAuth, ...list] });
-      bump();
+      onCreated();
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -317,7 +318,7 @@ function CreateMandateForm() {
 /*  Issued mandates list                                                      */
 /* -------------------------------------------------------------------------- */
 
-function IssuedMandates() {
+function IssuedMandates({ refreshTick }: { readonly refreshTick: number }) {
   const { sdk } = useActor();
   const [list, setList] = useState<readonly OwnedMandate[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -332,7 +333,7 @@ function IssuedMandates() {
     return () => {
       cancelled = true;
     };
-  }, [sdk, tick]);
+  }, [sdk, tick, refreshTick]);
 
   return (
     <section>
