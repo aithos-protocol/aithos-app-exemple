@@ -5,19 +5,19 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
-import { ActorProvider } from "./actor-context.js";
 import { App } from "./App.js";
+import { SdkProvider } from "./sdk-context.js";
 import "./styles.css";
 
-const el = document.getElementById("root");
-if (!el) throw new Error("missing #root");
+const root = document.getElementById("root");
+if (!root) throw new Error("missing #root element in index.html");
 
-createRoot(el).render(
+createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
-      <ActorProvider>
+      <SdkProvider>
         <App />
-      </ActorProvider>
+      </SdkProvider>
     </BrowserRouter>
   </StrictMode>,
 );
