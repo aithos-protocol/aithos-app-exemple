@@ -41,7 +41,7 @@ import { formatError } from "./Home.js";
 const PDS_URL =
   (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
     import.meta.env.VITE_AITHOS_PDS_URL) ||
-  "https://slpknok0md.execute-api.eu-west-3.amazonaws.com";
+  "https://pds.aithos.be";
 
 /** A did:key identity from a fresh Ed25519 keypair. */
 function freshDidKey() {

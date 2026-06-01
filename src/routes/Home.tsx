@@ -6,6 +6,7 @@
 
 import { useState, type ChangeEvent } from "react";
 
+import { runOnboarding } from "@aithos/protocol-client";
 import { AithosSDKError } from "@aithos/sdk";
 
 import { useSdk } from "../sdk-context.js";
@@ -728,7 +729,32 @@ function GoogleForm() {
 /*  Recovery file                                                             */
 /* -------------------------------------------------------------------------- */
 
+type RecoveryMode = "upload" | "create";
+
 function RecoveryForm() {
+  const [mode, setMode] = useState<RecoveryMode>("upload");
+  return (
+    <div className="stack">
+      <div className="tabs" style={{ marginBottom: 8 }}>
+        <button
+          className={mode === "upload" ? "active" : ""}
+          onClick={() => setMode("upload")}
+        >
+          Charger un fichier
+        </button>
+        <button
+          className={mode === "create" ? "active" : ""}
+          onClick={() => setMode("create")}
+        >
+          Créer une identité (#data)
+        </button>
+      </div>
+      {mode === "upload" ? <RecoveryUpload /> : <RecoveryCreate />}
+    </div>
+  );
+}
+
+function RecoveryUpload() {
   const { auth, bumpVersion } = useSdk();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -759,6 +785,169 @@ function RecoveryForm() {
       <input type="file" accept="application/json" onChange={onFile} disabled={busy} />
       {error && <div className="error">{error}</div>}
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Create a fresh self-custody identity (with the #data sphere) in-browser.  */
+/*                                                                            */
+/*  This is the local-friendly counterpart to app.aithos.be's account        */
+/*  creation. It calls protocol-client's `runOnboarding`, which:             */
+/*    1. generates a 5-sphere identity client-side (incl. #data),            */
+/*    2. publishes its DID document to api.aithos.be (signed #root envelope), */
+/*    3. publishes a first public Ethos edition,                             */
+/*    4. returns a plaintext recovery blob (seeds_hex incl. data).           */
+/*                                                                            */
+/*  Crucially this NEVER touches auth.aithos.be, so the localhost CORS gate   */
+/*  that blocks `signUp` does not apply — api.aithos.be primitives are        */
+/*  CORS-open and gated by the signed envelope, not the Origin header.        */
+/*                                                                            */
+/*  We force the user to download the recovery file BEFORE signing in: it's   */
+/*  the only copy of the private keys, and signing in flips the page to the   */
+/*  "already signed in" view, unmounting this form.                          */
+/* -------------------------------------------------------------------------- */
+
+function RecoveryCreate() {
+  const { auth, bumpVersion } = useSdk();
+  const [handle, setHandle] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [minted, setMinted] = useState<{
+    blob: Blob;
+    filename: string;
+    did: string;
+    hasData: boolean;
+  } | null>(null);
+
+  const validHandle = /^[a-z0-9][a-z0-9_-]{0,62}$/i.test(handle);
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await runOnboarding({
+        handle,
+        displayName: displayName.trim() || handle,
+        publicTitle: "Data sphere demo",
+        publicBody:
+          "Identity minted in-app to demonstrate the #data sphere on a real did:aithos account.",
+        tags: ["demo", "data-sphere"],
+      });
+      setMinted({
+        blob: r.recoveryBlob,
+        filename: `aithos-recovery-${r.identity.handle}.json`,
+        did: r.identity.did,
+        hasData: !!r.identity.data,
+      });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signIn = async () => {
+    if (!minted) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Re-read the same blob we just downloaded — signInWithRecovery
+      // accepts a Blob directly, so no round-trip through disk is needed.
+      await auth.signInWithRecovery({ file: minted.blob });
+      bumpVersion();
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (minted) {
+    return (
+      <div className="stack">
+        <div className="success">
+          Identity published on <code>api.aithos.be</code>:{" "}
+          <code>{minted.did}</code>
+          {minted.hasData ? (
+            <>
+              {" "}
+              — carries a <code>#data</code> sphere ✓
+            </>
+          ) : (
+            <>
+              {" "}
+              — <strong>WITHOUT</strong> a <code>#data</code> sphere (your
+              installed <code>@aithos/protocol-client</code> predates
+              alpha.19). Run <code>pnpm install</code> and retry.
+            </>
+          )}
+        </div>
+        <p className="lede">
+          <strong>Save this recovery file first</strong> — it holds your
+          private keys in plaintext and is the only way back into this
+          identity.
+        </p>
+        <div className="row">
+          <a href={URL.createObjectURL(minted.blob)} download={minted.filename}>
+            Download {minted.filename}
+          </a>
+          <button type="button" onClick={signIn} disabled={busy}>
+            {busy ? "Signing in…" : "Se connecter avec cette identité"}
+          </button>
+        </div>
+        {error && <div className="error">{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        if (validHandle && !busy) void create();
+      }}
+    >
+      <p className="lede">
+        Mint a brand-new <strong>self-custody <code>did:aithos</code></strong>{" "}
+        with the dedicated <code>#data</code> sphere, entirely in this
+        browser. Publishes the DID document to <code>api.aithos.be</code> so
+        the PDS can resolve it — then download the recovery file. No email,
+        no password, no JWT (so compute / wallet stay unavailable on this
+        account, but ethos + <code>#data</code> PDS ops work).
+      </p>
+      <label>
+        <span>Handle (1–63 chars, alphanumerics + - / _)</span>
+        <input
+          type="text"
+          value={handle}
+          onChange={(e) => setHandle(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      <label>
+        <span>Display name (optional, defaults to handle)</span>
+        <input
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      {handle && !validHandle && (
+        <div className="error">
+          Handle must be 1–63 chars: alphanumerics plus <code>-</code> /{" "}
+          <code>_</code>, starting with a letter or digit.
+        </div>
+      )}
+      <div className="row">
+        <button type="submit" disabled={busy || !validHandle}>
+          {busy ? "Publishing…" : "Créer + publier l'identité"}
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
+    </form>
   );
 }
 

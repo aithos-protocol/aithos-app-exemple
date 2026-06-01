@@ -45,7 +45,9 @@
 import {
   AithosAuth,
   AithosSDK,
+  indexedDbKeyStore,
   localStorageStore,
+  type AithosKeyStore,
   type AithosSession,
   type DelegateInfo,
   type OwnerInfo,
@@ -69,6 +71,13 @@ const APP_DID = "did:aithos:app:example-placeholder";
 interface SdkContextValue {
   readonly auth: AithosAuth;
   readonly sdk: AithosSDK;
+  /**
+   * The same keystore instance the auth uses, exposed so routes can read the
+   * signed-in owner's sphere seeds (e.g. the dedicated `#data` seed) to build
+   * an owner-signed data client. In a production app you'd wrap this behind an
+   * SDK convenience; here we keep it explicit to show the primitive.
+   */
+  readonly keyStore: AithosKeyStore;
   /** Increments after every auth-mutating call so consumers re-render. */
   readonly version: number;
   readonly bumpVersion: () => void;
@@ -86,6 +95,9 @@ const SdkContext = createContext<SdkContextValue | null>(null);
 export function SdkProvider({ children }: { readonly children: ReactNode }) {
   // One auth + one sdk for the whole app. useMemo ensures we don't
   // rebuild on re-render.
+  // One keystore for the whole app — passed to auth so it persists the owner,
+  // and kept here so routes can read the owner's sphere seeds (incl. #data).
+  const [keyStore] = useState<AithosKeyStore>(() => indexedDbKeyStore());
   const [auth] = useState(() => {
     // Read the public client key from Vite env. When set, the SDK can
     // call /custodial/sign-up, /custodial/verify and /verify/resend
@@ -101,6 +113,7 @@ export function SdkProvider({ children }: { readonly children: ReactNode }) {
       // Persist the JWT across reloads via localStorage. Sessions are
       // pinned to the page origin like any cookie, only longer-lived.
       sessionStore: localStorageStore(),
+      keyStore,
       ...(publicKey ? { publicKey } : {}),
     });
   });
@@ -144,8 +157,8 @@ export function SdkProvider({ children }: { readonly children: ReactNode }) {
   );
 
   const value = useMemo<SdkContextValue>(
-    () => ({ auth, sdk, version, bumpVersion, state }),
-    [auth, sdk, version, bumpVersion, state],
+    () => ({ auth, sdk, keyStore, version, bumpVersion, state }),
+    [auth, sdk, keyStore, version, bumpVersion, state],
   );
 
   if (!ready) return <div className="boot">Loading…</div>;

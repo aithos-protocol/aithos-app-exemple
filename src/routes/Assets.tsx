@@ -63,7 +63,7 @@ import { formatError } from "./Home.js";
 const ASSETS_PDS_URL =
   (typeof import.meta.env.VITE_AITHOS_ASSETS_PDS_URL === "string" &&
     import.meta.env.VITE_AITHOS_ASSETS_PDS_URL) ||
-  "https://yfzex613w3.execute-api.eu-west-3.amazonaws.com";
+  "https://assets.aithos.be";
 
 // CloudFront distribution that fronts the public-regime S3 bucket of
 // the assets PDS. Used to render public images via `<img src={...}>`

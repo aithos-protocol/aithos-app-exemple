@@ -13,6 +13,7 @@ import {
   createAppendDataClient,
   createDataClient,
   createDelegateDataClient,
+  type DataClient,
   type MintedMandate,
   type OwnedMandate,
   type Scope,
@@ -22,6 +23,7 @@ import {
   ed25519PublicKeyToMultibase,
   generateKeyPair,
   signMandate,
+  type SignedMandate,
 } from "@aithos/protocol-client";
 
 import {
@@ -42,7 +44,15 @@ const DEMO_SCHEMAS = [notesV1Lite];
 const PDS_URL =
   (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
     import.meta.env.VITE_AITHOS_PDS_URL) ||
-  "https://slpknok0md.execute-api.eu-west-3.amazonaws.com";
+  "https://pds.aithos.be";
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
 
 // read/write/admin are hierarchical (write ⊃ read, admin ⊃ write). `append`
 // is LATERAL: insert-only, grants NO read — not even read. A mandate carrying
@@ -112,9 +122,16 @@ export function Mandates() {
       <section>
         <h2>Create a mandate</h2>
         <p className="lede">
-          Mints a fresh delegate keypair, signs the mandate with your owner
-          identity, posts <code>aithos.publish_mandate</code>, and gives you a
-          downloadable bundle to hand to the grantee.
+          Mints a fresh delegate keypair and signs <strong>one</strong> mandate
+          with your owner identity carrying <strong>Ethos zone scopes</strong>{" "}
+          and, optionally, <strong>
+            <code>#data</code> collection scopes
+          </strong>{" "}
+          on the collections you own under your <code>did:aithos</code>. For{" "}
+          <code>read</code>/<code>write</code>/<code>admin</code> data grants the
+          collection CMK is re-wrapped to the grantee via{" "}
+          <code>authorizeDelegate</code> (signed by your <code>#data</code>{" "}
+          sphere). Gives you a downloadable bundle to hand to the grantee.
         </p>
         <CreateMandateForm
           onCreated={() => setRefreshTick((t) => t + 1)}
@@ -122,11 +139,14 @@ export function Mandates() {
       </section>
 
       <section>
-        <h2>Data collection mandate</h2>
+        <h2>Data collection mandate (legacy did:key)</h2>
         <p className="lede">
-          Grant a delegate access to one of your <strong>data collections</strong>{" "}
-          (the ones created on <code>/data</code>, under the shared demo{" "}
-          <code>did:key</code>). Pick a collection and an action —{" "}
+          <strong>Legacy.</strong> Grant a delegate access to one of your{" "}
+          <strong>data collections</strong> created on the legacy{" "}
+          <code>/data</code> page, under the shared demo <code>did:key</code>.
+          The combined form above is the canonical path — it grants{" "}
+          <code>#data</code> collections under your real account. Pick a
+          collection and an action —{" "}
           <code>read</code> / <code>write</code> / <code>admin</code> (hierarchical,
           CMK re-wrapped via <code>authorizeDelegate</code>), or{" "}
           <code>append</code> (<strong>lateral, insert-only, no read</strong>:{" "}
@@ -177,12 +197,33 @@ export function Mandates() {
 /*  Create form                                                               */
 /* -------------------------------------------------------------------------- */
 
+/** Per-collection data grant choice in the combined form. */
+type DataGrant = DataAction | "none";
+
+/** Owner #data client + its collections, or null when the signed-in account
+ * has no #data sphere (so no data grants can be offered). undefined = loading. */
+type OwnerDataState =
+  | undefined
+  | null
+  | { readonly client: DataClient; readonly did: string; readonly collections: readonly string[] };
+
+interface CombinedMinted {
+  readonly mandate: MintedMandate;
+  readonly bundleObject: Record<string, unknown>;
+  readonly dataAuth: readonly {
+    readonly collection: string;
+    readonly action: string;
+    readonly ok: boolean;
+    readonly detail?: string;
+  }[];
+}
+
 function CreateMandateForm({
   onCreated,
 }: {
   readonly onCreated: () => void;
 }) {
-  const { sdk } = useSdk();
+  const { sdk, keyStore } = useSdk();
   const [granteeId, setGranteeId] = useState("urn:aithos:agent:demo1");
   const [granteeLabel, setGranteeLabel] = useState("");
   const [scopes, setScopes] = useState<Set<Scope>>(
@@ -191,7 +232,41 @@ function CreateMandateForm({
   const [ttlSeconds, setTtlSeconds] = useState(86400);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [minted, setMinted] = useState<MintedMandate | null>(null);
+  const [minted, setMinted] = useState<CombinedMinted | null>(null);
+
+  // Owner #data client + collections for the optional data-grants section.
+  const [ownerData, setOwnerData] = useState<OwnerDataState>(undefined);
+  const [dataGrants, setDataGrants] = useState<Record<string, DataGrant>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const stored = await keyStore.loadOwner().catch(() => null);
+      if (cancelled) return;
+      // No owner, or an owner without a #data sphere → no data grants offered.
+      if (!stored || !stored.seedsHex.data) {
+        setOwnerData(null);
+        return;
+      }
+      const client = createDataClient({
+        pdsUrl: PDS_URL,
+        did: stored.did,
+        sphereSeed: hexToBytes(stored.seedsHex.data),
+        verificationMethod: `${stored.did}#data`,
+        schemas: DEMO_SCHEMAS,
+      });
+      try {
+        const cols = await client.listCollections();
+        if (cancelled) return;
+        setOwnerData({ client, did: stored.did, collections: cols.map((c) => c.name) });
+      } catch {
+        if (!cancelled) setOwnerData({ client, did: stored.did, collections: [] });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [keyStore]);
 
   const toggleScope = (s: Scope) => {
     setScopes((prev) => {
@@ -202,18 +277,58 @@ function CreateMandateForm({
     });
   };
 
+  const setGrant = (col: string, action: DataGrant) =>
+    setDataGrants((prev) => ({ ...prev, [col]: action }));
+
   const submit = async () => {
     setBusy(true);
     setError(null);
     setMinted(null);
     try {
+      const dataScopes: Scope[] = Object.entries(dataGrants)
+        .filter(([, a]) => a !== "none")
+        .map(([col, a]) => `data.${col}.${a}` as Scope);
+      const allScopes: Scope[] = [...scopes, ...dataScopes];
+      if (allScopes.length === 0) {
+        setError("Pick at least one Ethos scope or data grant.");
+        setBusy(false);
+        return;
+      }
+
+      // ONE mandate carrying both ethos.* and data.* scopes, signed by the
+      // owner. defaultSphereFromScopes picks the actor_sphere from the ethos
+      // scopes (data scopes are sphere-neutral); self for data-only.
       const r = await sdk.mandates.create({
         granteeId,
         ...(granteeLabel ? { granteeLabel } : {}),
-        scopes: [...scopes],
+        scopes: allScopes,
         ttlSeconds,
       });
-      setMinted(r);
+
+      // The mandate object lives inside the bundle — we need it to re-wrap the
+      // CMK for read/write/admin grants (append is lateral: no CMK wrap).
+      const bundleObject = JSON.parse(await r.bundle.text()) as Record<string, unknown>;
+      const mandate = bundleObject["mandate"] as SignedMandate;
+
+      const dataAuth: {
+        collection: string;
+        action: string;
+        ok: boolean;
+        detail?: string;
+      }[] = [];
+      if (ownerData) {
+        for (const [col, a] of Object.entries(dataGrants)) {
+          if (a === "none" || a === "append") continue;
+          try {
+            await ownerData.client.authorizeDelegate({ collectionName: col, mandate });
+            dataAuth.push({ collection: col, action: a, ok: true });
+          } catch (e) {
+            dataAuth.push({ collection: col, action: a, ok: false, detail: formatError(e) });
+          }
+        }
+      }
+
+      setMinted({ mandate: r, bundleObject, dataAuth });
       onCreated();
     } catch (e) {
       setError(formatError(e));
@@ -248,7 +363,7 @@ function CreateMandateForm({
       </label>
       <div>
         <span style={{ display: "block", marginBottom: 4, color: "#666" }}>
-          Scopes
+          Ethos zone scopes
         </span>
         <div className="row">
           {ALL_SCOPES.map((s) => (
@@ -265,6 +380,57 @@ function CreateMandateForm({
           ))}
         </div>
       </div>
+
+      <div>
+        <span style={{ display: "block", marginBottom: 4, color: "#666" }}>
+          Data collections (<code>#data</code>) — optional
+        </span>
+        {ownerData === undefined && <p className="lede">Loading your #data collections…</p>}
+        {ownerData === null && (
+          <p className="lede" style={{ marginTop: 0 }}>
+            Sign in with a <strong>#data</strong> account (Home → Recovery →
+            Créer une identité (#data)) and create a collection on the{" "}
+            <strong>Data</strong> tab to grant data scopes here.
+          </p>
+        )}
+        {ownerData && ownerData.collections.length === 0 && (
+          <p className="lede" style={{ marginTop: 0 }}>
+            No <code>#data</code> collections yet under{" "}
+            <code>{ownerData.did.slice(0, 20)}…</code>. Create one on the{" "}
+            <strong>Data</strong> tab first.
+          </p>
+        )}
+        {ownerData && ownerData.collections.length > 0 && (
+          <div className="stack" style={{ gap: 6 }}>
+            {ownerData.collections.map((col) => (
+              <div
+                key={col}
+                className="row"
+                style={{ gap: 8, alignItems: "center" }}
+              >
+                <code style={{ flex: "1 1 200px" }}>{col}</code>
+                <select
+                  value={dataGrants[col] ?? "none"}
+                  onChange={(e) => setGrant(col, e.target.value as DataGrant)}
+                >
+                  <option value="none">no access</option>
+                  {DATA_ACTIONS.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                      {a === "append"
+                        ? " (insert-only, no read)"
+                        : a === "read"
+                          ? ""
+                          : " (implies read)"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <label>
         <span>TTL</span>
         <select
@@ -279,24 +445,37 @@ function CreateMandateForm({
         </select>
       </label>
       <div className="row">
-        <button
-          type="submit"
-          disabled={busy || scopes.size === 0 || !granteeId}
-        >
+        <button type="submit" disabled={busy || !granteeId}>
           {busy ? "Creating…" : "Create mandate"}
         </button>
       </div>
       {error && <div className="error">{error}</div>}
       {minted && (
         <div className="success">
-          Created <code>{minted.mandateId}</code>. Hand this file to the
-          grantee — it contains the delegate seed.{" "}
+          Created <code>{minted.mandate.mandateId}</code> · scopes{" "}
+          <code>{minted.mandate.scopes.join(", ")}</code>.
+          {minted.dataAuth.length > 0 && (
+            <>
+              <br />
+              {minted.dataAuth.map((d) => (
+                <span key={`${d.collection}.${d.action}`}>
+                  CMK re-wrap for <code>{d.collection}</code> ({d.action}) →{" "}
+                  <strong>
+                    {d.ok ? "authorized ✓" : `failed ✗ — ${d.detail ?? ""}`}
+                  </strong>
+                  <br />
+                </span>
+              ))}
+            </>
+          )}
+          Hand this file to the grantee — it contains the delegate seed.{" "}
           <a
-            href={URL.createObjectURL(minted.bundle)}
-            download={minted.filename}
+            href={URL.createObjectURL(minted.mandate.bundle)}
+            download={minted.mandate.filename}
           >
-            Download {minted.filename}
+            Download {minted.mandate.filename}
           </a>
+          <InviteByEmail bundleObject={minted.bundleObject} />
         </div>
       )}
     </form>
@@ -316,17 +495,31 @@ interface DataMandateResult {
   readonly bundleObject: Record<string, unknown>;
   readonly verifiedReadCount: number | null;
   /** Present for append mandates: proof of insert-only + no-read. */
-  readonly append?: {
-    readonly insertedRecordId: string;
-    /** Grantee cannot even re-read the record it just appended. */
-    readonly ownDepositReadBlocked: boolean;
-    /** The owner, by contrast, CAN read the deposit (by design, like gamma). */
-    readonly ownerCanRead: boolean;
-  };
+  readonly append?:
+    | {
+        readonly insertedRecordId: string;
+        /** Grantee cannot even re-read the record it just appended. */
+        readonly ownDepositReadBlocked: boolean;
+        /** The owner, by contrast, CAN read the deposit (by design, like gamma). */
+        readonly ownerCanRead: boolean;
+      }
+    | {
+        /**
+         * The collection uses a non-notes schema, so the demo's proof-insert
+         * (which only knows the notes record shape) was skipped. The mandate
+         * and bundle are still valid — a grantee can append a record matching
+         * the collection's actual schema.
+         */
+        readonly skipped: true;
+        readonly schema: string;
+      };
 }
 
 function DataMandateForm() {
   const [collections, setCollections] = useState<readonly string[] | null>(null);
+  const [collectionSchemas, setCollectionSchemas] = useState<
+    Record<string, string>
+  >({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>("");
   const [action, setAction] = useState<DataAction>("read");
@@ -353,6 +546,9 @@ function DataMandateForm() {
         if (cancelled) return;
         const names = cols.map((c) => c.name);
         setCollections(names);
+        setCollectionSchemas(
+          Object.fromEntries(cols.map((c) => [c.name, c.schema])),
+        );
         if (names.length > 0) setSelected((s) => s || names[0]!);
       } catch (e) {
         if (!cancelled) setLoadError(formatError(e));
@@ -408,6 +604,27 @@ function DataMandateForm() {
       const filename = `${selected}-${action}.aithos-delegate.json`;
 
       if (action === "append") {
+        // The demonstrative proof-insert below is hard-coded to the notes
+        // record shape ({title}). For a collection on any other schema (e.g.
+        // aithos.contacts.v1, which requires `name`), inserting {title} is
+        // rejected by the PDS (AITHOS_DATA_RECORD_INVALID). Still mint the
+        // mandate + bundle — only the demo deposit is skipped.
+        if (collectionSchemas[selected] !== notesV1Lite.schema) {
+          setResult({
+            mandateId: mandate.id,
+            scope,
+            bundleUrl,
+            filename,
+            bundleObject: bundle,
+            verifiedReadCount: null,
+            append: {
+              skipped: true,
+              schema: collectionSchemas[selected] ?? "(unknown)",
+            },
+          });
+          return;
+        }
+
         // APPEND: lateral, insert-only, no read. Do NOT authorizeDelegate —
         // an append holder must never receive the CMK (that would grant read).
         // It seals each DEK to the owner's pubkey instead.
@@ -585,7 +802,18 @@ function DataMandateForm() {
               {result.verifiedReadCount === 1 ? "" : "s"}.{" "}
             </>
           )}
-          {result.append && (
+          {result.append && "skipped" in result.append && (
+            <>
+              <br />
+              Demo deposit skipped — this collection uses schema{" "}
+              <code>{result.append.schema}</code>, not the notes shape the demo
+              auto-inserts ({"{ title }"}). The mandate and bundle are still
+              valid; the grantee can append a record matching the collection’s
+              own schema.
+              <br />
+            </>
+          )}
+          {result.append && !("skipped" in result.append) && (
             <>
               <br />
               Grantee appended <code>{result.append.insertedRecordId.slice(0, 16)}…</code> ✓
@@ -656,24 +884,26 @@ function InviteByEmail({
       <span style={{ display: "block", marginBottom: 4, color: "var(--muted)" }}>
         …or send it by magic link (the mandate never rides the URL):
       </span>
-      <form
-        className="row"
-        style={{ gap: 8 }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
-      >
+      {/* NOT a <form> — this lives inside the DataMandateForm's <form>, and
+          nested forms are invalid HTML (the browser reloads the page). Use a
+          plain div + button onClick instead. */}
+      <div className="row" style={{ gap: 8 }}>
         <input
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="patient@example.com"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (!busy && email) void send();
+            }
+          }}
         />
-        <button type="submit" disabled={busy || !email}>
+        <button type="button" onClick={() => void send()} disabled={busy || !email}>
           {busy ? "Sending…" : "Send magic link"}
         </button>
-      </form>
+      </div>
       {msg && <div className="success" style={{ marginTop: 6 }}>{msg}</div>}
       {err && <div className="error" style={{ marginTop: 6 }}>{err}</div>}
     </div>
