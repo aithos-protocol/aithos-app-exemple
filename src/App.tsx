@@ -5,6 +5,7 @@ import { Route, Routes } from "react-router-dom";
 
 import { Nav } from "./components/Nav.js";
 import { Agent } from "./routes/Agent.js";
+import { Assets } from "./routes/Assets.js";
 import { Compute } from "./routes/Compute.js";
 import { DataPage } from "./routes/Data.js";
 import { Home } from "./routes/Home.js";
@@ -24,7 +25,7 @@ export function App() {
           <Route path="/mandates" element={<Mandates />} />
           <Route path="/compute" element={<Compute />} />
           <Route path="/wallet" element={<Wallet />} />
-          <Route path="/assets" element={<Stub name="Assets" />} />
+          <Route path="/assets" element={<Assets />} />
           <Route path="/agent" element={<Agent />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -33,15 +34,6 @@ export function App() {
   );
 }
 
-/** Temporary placeholder while each page is ported onto the actor model. */
-function Stub({ name }: { readonly name: string }) {
-  return (
-    <section>
-      <h2>{name}</h2>
-      <p className="lede">Porting onto the single-actor model — coming next.</p>
-    </section>
-  );
-}
 
 function NotFound() {
   return (
