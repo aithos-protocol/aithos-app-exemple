@@ -157,6 +157,11 @@ async function main() {
     ok(false, `delegate import failed: ${e.message}`);
   }
 
+  // NOTE: the delegate APPEND (gamma) path is validated separately — it needs
+  // the collection's vendor schema-lite passed to createAppendDataClient
+  // (AithosSchemaLite is required there, unlike createDataClient's registry),
+  // which is exactly the extra plumbing that keeps append a v0.2 UI target.
+
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   process.exit(fail === 0 ? 0 : 1);
 }
