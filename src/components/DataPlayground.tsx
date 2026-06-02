@@ -419,15 +419,116 @@ function RecordsPanel({
     );
   }
 
+  // Any other (vendor) schema: the SDK auto-resolves the published schema from
+  // the PDS and decodes records, so we render them generically (read-only).
+  // This is the strangler-friendly default — the reference app reads ANY
+  // collection without bundling a per-schema form.
+  return (
+    <GenericRecordsPanel client={client} collectionMeta={activeCollection} />
+  );
+}
+
+/**
+ * Read-only generic record viewer for any collection whose schema has no
+ * dedicated form. Relies on the SDK auto-resolving the published schema from
+ * the PDS (alpha.55+) so records come back decrypted; we just render their
+ * decrypted key/values.
+ */
+function GenericRecordsPanel({
+  client,
+  collectionMeta,
+}: {
+  readonly client: DataClient;
+  readonly collectionMeta: CollectionMeta;
+}) {
+  const collection = useMemo<DataCollection>(
+    () => client.collection(collectionMeta.name),
+    [client, collectionMeta.name],
+  );
+  const [items, setItems] = useState<Record<string, unknown>[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await collection.list({ limit: 50, order: "newest" });
+      setItems(r.items as Record<string, unknown>[]);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collection]);
+
   return (
     <section>
-      <h2>Records — {activeCollection.name}</h2>
-      <p className="error">
-        Unknown schema <code>{activeCollection.schema}</code>. Register it in{" "}
-        <code>VENDOR_SCHEMAS</code> + add a form component.
+      <h2>
+        Records — collection &quot;{collectionMeta.name}&quot;{" "}
+        <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 14 }}>
+          ({items.length} loaded · schema <code>{collectionMeta.schema}</code>)
+        </span>
+      </h2>
+      <p className="lede">
+        Generic read-only view — this app ships no dedicated form for{" "}
+        <code>{collectionMeta.schema}</code>, so records are shown as decrypted
+        key/values. The schema was auto-resolved from the PDS; encrypted fields
+        are decrypted client-side under the collection&apos;s CMK.
       </p>
+      <div className="row">
+        <button onClick={() => void refresh()} disabled={busy}>
+          {busy ? "Loading…" : "Reload"}
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {items.length === 0 && !busy && (
+        <p className="lede">
+          <em>No records.</em>
+        </p>
+      )}
+      <ul className="stack" style={{ listStyle: "none", padding: 0 }}>
+        {items.map((it, i) => (
+          <li
+            key={(it.record_id as string) ?? (it._id as string) ?? String(i)}
+            style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}
+          >
+            <table>
+              <tbody>
+                {Object.entries(it).map(([k, v]) => (
+                  <tr key={k}>
+                    <td style={{ color: "var(--muted)", paddingRight: 12, verticalAlign: "top" }}>
+                      <code>{k}</code>
+                    </td>
+                    <td>
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {renderGenericValue(v)}
+                      </pre>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </li>
+        ))}
+      </ul>
     </section>
   );
+}
+
+function renderGenericValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
 }
 
 function NotesRecordsPanel({
