@@ -26,6 +26,7 @@ import {
   createDataClient,
   createDelegateDataClient,
   indexedDbKeyStore,
+  DEV_SDK_ENDPOINTS,
   type AithosKeyStore,
   type DataClient,
   type DelegateInfo,
@@ -196,7 +197,16 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
   // but we never read getCurrentSession(); recovery + mandate paths never
   // create a JWT anyway.
   const [auth] = useState(() => new AithosAuth({ keyStore }));
-  const [sdk] = useState(() => new AithosSDK({ auth, appDid: APP_DID }));
+  // Dev by default: the whole SDK (incl. the ethos api/cdn reached through
+  // protocol-client) targets the *.dev.aithos.be account. Set VITE_AITHOS_ENV=prod
+  // to hit production instead.
+  const [sdk] = useState(() =>
+    new AithosSDK({
+      auth,
+      appDid: APP_DID,
+      ...(import.meta.env.VITE_AITHOS_ENV === "prod" ? {} : { endpoints: DEV_SDK_ENDPOINTS }),
+    }),
+  );
 
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
