@@ -23,8 +23,6 @@
 import {
   AithosAuth,
   AithosSDK,
-  createDataClient,
-  createDelegateDataClient,
   indexedDbKeyStore,
   DEV_SDK_ENDPOINTS,
   type AithosKeyStore,
@@ -34,7 +32,6 @@ import {
   type ReadonlyDataClient,
   type StoredDelegateKeys,
 } from "@aithos/sdk";
-import type { SignedMandate } from "@aithos/protocol-client";
 import {
   createContext,
   useCallback,
@@ -117,6 +114,34 @@ function ownerCapabilities(): Capabilities {
   };
 }
 
+// Coarse, zone-level read/write gate over the v0.3 verb-scope grammar
+// (`ethos.<verb>.<zone>[#selector]`). Read-bearing verbs let the holder decrypt
+// the zone; write-bearing verbs let it mutate. Selectors (#id=/#prefix=/#tag=)
+// narrow WHICH sections — that per-section truth comes from EthosZone.index();
+// here we only decide whether the actor can touch the zone at all (tab + add form).
+const ETHOS_READ_VERBS: ReadonlySet<string> = new Set(["read", "edit", "append", "write"]);
+const ETHOS_WRITE_VERBS: ReadonlySet<string> = new Set(["edit", "append", "delete", "write"]);
+
+function ethosScopeZoneVerb(scope: string): { verb: string; zone: string } | null {
+  if (!scope.startsWith("ethos.")) return null;
+  const head = scope.split("#")[0]!;
+  const parts = head.split(".");
+  if (parts.length !== 3) return null;
+  return { verb: parts[1]!, zone: parts[2]! };
+}
+
+function anyEthosScope(
+  scopes: readonly string[],
+  zone: ZoneName,
+  verbs: ReadonlySet<string>,
+  allowAll: boolean,
+): boolean {
+  return scopes.some((s) => {
+    const p = ethosScopeZoneVerb(s);
+    return !!p && verbs.has(p.verb) && (p.zone === zone || (allowAll && p.zone === "all"));
+  });
+}
+
 function delegateCapabilities(scopes: readonly string[]): Capabilities {
   const has = (s: string) => scopes.includes(s);
 
@@ -147,8 +172,8 @@ function delegateCapabilities(scopes: readonly string[]): Capabilities {
 
   return {
     isOwner: false,
-    ethosRead: (zone) => has(`ethos.read.${zone}`) || has(`ethos.write.${zone}`),
-    ethosWrite: (zone) => has(`ethos.write.${zone}`),
+    ethosRead: (zone) => anyEthosScope(scopes, zone, ETHOS_READ_VERBS, true),
+    ethosWrite: (zone) => anyEthosScope(scopes, zone, ETHOS_WRITE_VERBS, false),
     dataCan: dataScopeAllows,
     canIssueMandates: false,
     canCompute: has("compute.invoke"),
@@ -182,14 +207,6 @@ interface ActorContextValue {
 }
 
 const Ctx = createContext<ActorContextValue | null>(null);
-
-function hexToBytes(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
 
 export function ActorProvider({ children }: { readonly children: ReactNode }) {
   const [keyStore] = useState<AithosKeyStore>(() => indexedDbKeyStore());
@@ -294,23 +311,22 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
     if (!actor) return null;
     if (actor.kind === "owner") {
       if (!ownerDataSeedHex) return null;
-      return createDataClient({
-        pdsUrl: PDS_URL,
-        did: actor.subjectDid,
-        sphereSeed: hexToBytes(ownerDataSeedHex),
-        verificationMethod: `${actor.subjectDid}#data`,
-        schemas: vendorLites(),
-      });
+      // Session-based: the owner's #data sphere seed lives in the keystore
+      // (loaded by auth.resume()); the SDK derives the client from it. No raw
+      // seed plumbing here anymore.
+      return auth.ownerDataClient({ pdsUrl: PDS_URL, schemas: vendorLites() });
     }
     if (!delegateKeys) return null;
-    return createDelegateDataClient({
-      pdsUrl: PDS_URL,
+    // Delegate path needs the mandate imported into the auth session
+    // (auth.importMandate). The client is resolved from session state, not the
+    // raw delegate seed.
+    return auth.delegateDataClient({
       subjectDid: delegateKeys.subjectDid,
-      mandate: delegateKeys.mandate as unknown as SignedMandate,
-      delegateSeed: hexToBytes(delegateKeys.delegateSeedHex),
+      mandateId: delegateKeys.mandateId,
+      pdsUrl: PDS_URL,
       schemas: vendorLites(),
     });
-  }, [actor, ownerDataSeedHex, delegateKeys]);
+  }, [actor, auth, ownerDataSeedHex, delegateKeys]);
 
   const getEthosClient = useCallback(async (): Promise<EthosClient> => {
     if (!actor) throw new Error("no actor signed in");

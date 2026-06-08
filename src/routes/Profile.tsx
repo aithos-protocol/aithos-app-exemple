@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { EthosClient, Section } from "@aithos/sdk";
+import type { EthosClient, Section, SectionIndexEntry } from "@aithos/sdk";
 
 import { useActor, type ZoneName } from "../actor-context.js";
 import { formatError } from "./Home.js";
@@ -163,6 +163,7 @@ function ZoneEditor({
   readonly rev: number;
   readonly onChanged: () => void;
 }) {
+  const [index, setIndex] = useState<readonly SectionIndexEntry[] | null>(null);
   const [sections, setSections] = useState<readonly Section[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,10 +172,18 @@ function ZoneEditor({
     setLoading(true);
     setError(null);
     try {
-      const list = await client.zone(zone).sections();
+      // index() = every persisted section + per-section readable/writable flags;
+      // sections() = decrypted bodies with staged edits applied. We join them so
+      // we can show inaccessible sections (greyed) the way index() exposes them.
+      const [idx, list] = await Promise.all([
+        client.zone(zone).index(),
+        client.zone(zone).sections(),
+      ]);
+      setIndex(idx);
       setSections(list);
     } catch (e) {
       setError(formatError(e));
+      setIndex(null);
       setSections(null);
     } finally {
       setLoading(false);
@@ -203,6 +212,14 @@ function ZoneEditor({
     onChanged();
   };
 
+  // Decrypted bodies keyed by id, and which ids are persisted (in the index).
+  const byId = new Map((sections ?? []).map((s) => [s.id, s] as const));
+  const persistedIds = new Set((index ?? []).map((e) => e.id));
+  // In sections() but not the index = staged-new adds not yet published.
+  const stagedNew = (sections ?? []).filter((s) => !persistedIds.has(s.id));
+  const nothingToShow =
+    index !== null && index.length === 0 && stagedNew.length === 0 && !loading;
+
   return (
     <div className="stack">
       {loading && <p>Loading sections…</p>}
@@ -219,18 +236,53 @@ function ZoneEditor({
           )}
         </div>
       )}
-      {sections && sections.length === 0 && !loading && (
+      {nothingToShow && (
         <p className="lede">
           No sections in <code>{zone}</code> yet.
         </p>
       )}
-      {sections?.map((s) => (
+
+      {/* Every persisted section, in authored order: editable, locked, or
+          pending-delete. Sections this actor can't decrypt show greyed. */}
+      {index?.map((entry) => {
+        if (!entry.readable) {
+          return <LockedSlot key={entry.id} entry={entry} zone={zone} />;
+        }
+        const decrypted = byId.get(entry.id);
+        if (!decrypted) {
+          // Readable but gone from sections() = staged for deletion.
+          return (
+            <div key={entry.id} className="section-card" style={{ opacity: 0.55 }}>
+              <h4 style={{ textDecoration: "line-through" }}>
+                {entry.title ?? entry.id}
+              </h4>
+              <p className="lede">
+                <em>Marked for deletion — publish to apply.</em>
+              </p>
+            </div>
+          );
+        }
+        return (
+          <SectionRow
+            key={entry.id}
+            section={decrypted}
+            zone={zone}
+            client={client}
+            writable={entry.writable}
+            onChanged={onChanged}
+          />
+        );
+      })}
+
+      {/* Locally staged new sections (not yet in the published index). */}
+      {stagedNew.map((s) => (
         <SectionRow
           key={s.id}
           section={s}
           zone={zone}
           client={client}
-          canWrite={canWrite}
+          writable
+          staged
           onChanged={onChanged}
         />
       ))}
@@ -258,7 +310,7 @@ function ZoneEditor({
         </>
       ) : (
         <p className="lede">
-          <em>Read-only — this actor has no <code>ethos.write.{zone}</code> scope.</em>
+          <em>Read-only here — your mandate has no write verb (edit / append / write) on <code>{zone}</code>.</em>
         </p>
       )}
     </div>
@@ -273,13 +325,17 @@ function SectionRow({
   section,
   zone,
   client,
-  canWrite,
+  writable,
+  staged,
   onChanged,
 }: {
   readonly section: Section;
   readonly zone: ZoneName;
   readonly client: EthosClient;
-  readonly canWrite: boolean;
+  /** This actor's mandate authorizes editing THIS section (owner: always). */
+  readonly writable: boolean;
+  /** True for a locally-staged, not-yet-published section. */
+  readonly staged?: boolean;
   readonly onChanged: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -289,13 +345,20 @@ function SectionRow({
   if (!editing) {
     return (
       <div className="section-card">
-        <h4>{section.title}</h4>
+        <h4>
+          {section.title}
+          {staged && (
+            <span className="tag" style={{ marginLeft: 8, opacity: 0.7 }}>
+              staged
+            </span>
+          )}
+        </h4>
         <p className="body">{section.body}</p>
         <div className="meta">
           id: <code>{section.id}</code>
           {section.tags && section.tags.length > 0 ? <> · tags: {section.tags.join(", ")}</> : null}
         </div>
-        {canWrite && (
+        {writable ? (
           <div className="row" style={{ marginTop: 8 }}>
             <button
               className="secondary"
@@ -317,6 +380,10 @@ function SectionRow({
               Stage delete
             </button>
           </div>
+        ) : (
+          <p className="meta" style={{ marginTop: 8 }}>
+            <em>Readable, but your mandate can't edit this section.</em>
+          </p>
         )}
       </div>
     );
@@ -350,6 +417,38 @@ function SectionRow({
         <button className="secondary" onClick={() => setEditing(false)}>
           Cancel
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  LockedSlot — an inaccessible section, shown greyed                         */
+/* -------------------------------------------------------------------------- */
+
+function LockedSlot({
+  entry,
+  zone,
+}: {
+  readonly entry: SectionIndexEntry;
+  readonly zone: ZoneName;
+}) {
+  // `self` seals its index, so an out-of-scope section has no decryptable title;
+  // `public`/`circle` keep the clear title (only the body stays sealed).
+  const heading = entry.title ?? (zone === "self" ? "Sealed section" : entry.id);
+  return (
+    <div
+      className="section-card"
+      style={{ opacity: 0.5, filter: "grayscale(1)" }}
+      aria-disabled
+      title="Not accessible with your current mandate"
+    >
+      <h4>🔒 {heading}</h4>
+      <p className="lede">
+        <em>Not accessible with your mandate{entry.title ? "" : " (title sealed)"}.</em>
+      </p>
+      <div className="meta">
+        id: <code>{entry.id}</code>
       </div>
     </div>
   );
