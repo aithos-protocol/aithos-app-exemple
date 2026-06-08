@@ -12,11 +12,11 @@ importers:
         specifier: ^0.1.0-alpha.1
         version: 0.1.0-alpha.1
       '@aithos/protocol-client':
-        specifier: ^0.1.0-alpha.22
-        version: 0.1.0-alpha.22
+        specifier: ^0.1.0-alpha.23
+        version: 0.1.0-alpha.23
       '@aithos/sdk':
-        specifier: ^0.1.0-alpha.63
-        version: 0.1.0-alpha.63(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.22)(@aithos/protocol-core@0.9.0)(react@18.3.1)
+        specifier: ^0.1.0-alpha.64
+        version: 0.1.0-alpha.64(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.23)(@aithos/protocol-core@0.9.0)(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -49,20 +49,20 @@ packages:
     resolution: {integrity: sha512-aOnRIUQS/dM/E2zjyQxZnx/jaNpqI/NvAGYRtB2nGrz8+uc4AKTBPJUBDuoDDiPqdxvJ90bFi2mfYex4/nZEdQ==}
     engines: {node: '>=20'}
 
-  '@aithos/protocol-client@0.1.0-alpha.22':
-    resolution: {integrity: sha512-/ksEa7+/XOha9A2Nnildzw8oPmcfdaM9bLLe3OrHnE+Qi3+/lbJMHrmyAxlbzNoP+jSpnEtoNq/YCPfNPaVzmA==}
+  '@aithos/protocol-client@0.1.0-alpha.23':
+    resolution: {integrity: sha512-4oBOX5GG3e1CBPn+EE1OFwubNj4uqcbQ7moLxd2K5g33qC6m2rCP/Hg71XL7vwk00Zl6TuK5k8CPXgcrBVyGBA==}
     engines: {node: '>=20'}
 
   '@aithos/protocol-core@0.9.0':
     resolution: {integrity: sha512-RHd6B1vx8fEEP4oIC2e5+DPeHWwT7FEF+yFGli41rzFTNHB901/82ZcgfulsGW7foic9nad3pn8sSE7F29t2oA==}
     engines: {node: '>=20'}
 
-  '@aithos/sdk@0.1.0-alpha.63':
-    resolution: {integrity: sha512-NWcT5MrEFQiPOsv2jRTYNuiXB2Qzv81z3l2+R+3FgQ+efgw30LH77osJGNDl4Y3EqVCU3jRMXj5RjIXUXOBTvA==}
+  '@aithos/sdk@0.1.0-alpha.64':
+    resolution: {integrity: sha512-RclP49PBCSDfEl1Vc+U2r/oS4vNuG/ObqL73tQRIoRGvlOUie8TC2GmrUyCTr09BxrMFtVQpJf3M/BLpPJk1UQ==}
     engines: {node: '>=20'}
     peerDependencies:
       '@aithos/assets-crypto': '>=0.1.0-alpha.1 <0.2.0'
-      '@aithos/protocol-client': ^0.1.0-alpha.22
+      '@aithos/protocol-client': ^0.1.0-alpha.23
       '@aithos/protocol-core': '>=0.9.0 <0.10.0'
       react: ^18.0.0 || ^19.0.0
     peerDependenciesMeta:
@@ -746,7 +746,7 @@ snapshots:
       '@stablelib/sha256': 2.0.1
       '@stablelib/xchacha20poly1305': 2.0.1
 
-  '@aithos/protocol-client@0.1.0-alpha.22':
+  '@aithos/protocol-client@0.1.0-alpha.23':
     dependencies:
       '@aithos/protocol-core': 0.9.0
       '@noble/ciphers': 1.3.0
@@ -768,9 +768,9 @@ snapshots:
       adm-zip: 0.5.17
       ulid: 2.4.0
 
-  '@aithos/sdk@0.1.0-alpha.63(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.22)(@aithos/protocol-core@0.9.0)(react@18.3.1)':
+  '@aithos/sdk@0.1.0-alpha.64(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.23)(@aithos/protocol-core@0.9.0)(react@18.3.1)':
     dependencies:
-      '@aithos/protocol-client': 0.1.0-alpha.22
+      '@aithos/protocol-client': 0.1.0-alpha.23
       '@aithos/protocol-core': 0.9.0
     optionalDependencies:
       '@aithos/assets-crypto': 0.1.0-alpha.1
