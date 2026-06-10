@@ -437,15 +437,24 @@ function SectionRow({
   // Collapsed — only the index title is known; no body has been loaded.
   if (body === undefined) {
     return (
-      <div className="section-card">
+      <div className="section-card" style={entry.readable ? undefined : { opacity: 0.55 }}>
         <h4>{entry.title ?? entry.id}</h4>
         <div className="meta">
           id: <code>{entry.id}</code>
         </div>
         {openErr && <div className="error">{openErr}</div>}
         <div className="row" style={{ marginTop: 8 }}>
-          <button className="secondary" disabled={opening} onClick={() => void open()}>
-            {opening ? "Opening…" : "Open"}
+          <button
+            className="secondary"
+            disabled={opening || !entry.readable}
+            title={
+              entry.readable
+                ? undefined
+                : "Not decryptable for this mandate: the section isn't sealed to it (or the mandate was revoked). Ask the owner to re-seal, or import a fresh bundle."
+            }
+            onClick={() => void open()}
+          >
+            {opening ? "Opening…" : entry.readable ? "Open" : "Sealed 🔒"}
           </button>
         </div>
       </div>
