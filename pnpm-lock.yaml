@@ -15,8 +15,8 @@ importers:
         specifier: ^0.1.0-alpha.35
         version: 0.1.0-alpha.35
       '@aithos/sdk':
-        specifier: 0.1.0-alpha.81
-        version: 0.1.0-alpha.81(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.35)(@aithos/protocol-core@0.10.0)(react@18.3.1)
+        specifier: ^0.1.0-alpha.83
+        version: 0.1.0-alpha.83(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.35)(@aithos/protocol-core@0.10.0)(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -57,8 +57,8 @@ packages:
     resolution: {integrity: sha512-nc38xiewdfz21ZzYsj6I7OTFt1bZh1bWSdg/V/gXBS6oscT2wqSy0mW1fEDjBHt6SJQZKHUW+Vvlmrsv+NDmKw==}
     engines: {node: '>=20'}
 
-  '@aithos/sdk@0.1.0-alpha.81':
-    resolution: {integrity: sha512-/JwMm1m0oyAQ6GFRr3W18Mo/RhLe/ce3p6lezQLkVqSfcwOj0MpHi9lKFJyBs7CFpe5aSldPpB/hd7GoSUxlMA==}
+  '@aithos/sdk@0.1.0-alpha.83':
+    resolution: {integrity: sha512-jFMnumrFUyPKDcCquz6bgpyi6YRRBVFweUYKPIBwF0AmDsYLesVtBA+gzYLw/FhPsn/hAWydgFL1zJwg8RRKKQ==}
     engines: {node: '>=20'}
     peerDependencies:
       '@aithos/assets-crypto': '>=0.1.0-alpha.1 <0.2.0'
@@ -768,7 +768,7 @@ snapshots:
       adm-zip: 0.5.17
       ulid: 2.4.0
 
-  '@aithos/sdk@0.1.0-alpha.81(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.35)(@aithos/protocol-core@0.10.0)(react@18.3.1)':
+  '@aithos/sdk@0.1.0-alpha.83(@aithos/assets-crypto@0.1.0-alpha.1)(@aithos/protocol-client@0.1.0-alpha.35)(@aithos/protocol-core@0.10.0)(react@18.3.1)':
     dependencies:
       '@aithos/protocol-client': 0.1.0-alpha.35
       '@aithos/protocol-core': 0.10.0
