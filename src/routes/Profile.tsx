@@ -7,12 +7,14 @@
 //   - delegate : sdk.ethos.of(subjectDid). Only the zones the mandate grants
 //                are shown; write controls appear only with ethos.write.<zone>.
 //
-// IMPORTANT — staging model: the EthosClient holds an in-memory buffer of
-// pending changes (addSection/updateSection/deleteSection) until publish().
-// We therefore build the client ONCE per (actor kind + subject) and keep it
-// stable for the whole page lifetime — rebuilding it (e.g. on an unrelated
-// context bump) would silently discard staged edits. Re-renders after a stage
-// are driven by a LOCAL `rev` counter, never by the global actor bump.
+// IMPORTANT — per-section publish: every add / edit / delete is published on its
+// own (stage the single change, then publish() immediately), so each action is a
+// content-addressed delta edition — only the changed section's blob is uploaded,
+// the rest carry forward by sha. The EthosClient still buffers changes in memory,
+// so we build it ONCE per (actor kind + subject) and keep it stable for the page
+// lifetime; the PublishBar only reappears if a publish failed and left a change
+// staged. Re-renders after each action are driven by a LOCAL `rev` counter, never
+// the global actor bump.
 //
 // The "authorized vs. decryptable" nuance is surfaced: a delegate may hold
 // ethos.read.circle yet fail to decrypt if the owner never sealed the zone to
@@ -26,6 +28,10 @@ import { useActor, type ZoneName } from "../actor-context.js";
 import { formatError } from "./Home.js";
 
 const ZONES: readonly ZoneName[] = ["public", "circle", "self"];
+
+/** Sections shown per page in the zone editor (client-side pagination over the
+ *  fully-loaded index — only bodies are lazy, so titles/tags are all in hand). */
+const PAGE_SIZE = 20;
 
 export function Profile() {
   const { actor, capabilities: cap, getEthosClient } = useActor();
@@ -135,7 +141,9 @@ export function Profile() {
             rev={rev}
             onChanged={() => setRev((r) => r + 1)}
           />
-          {ZONES.some((z) => cap.ethosWrite(z)) && (
+          {/* Per-section publish means there is normally nothing pending; this
+              bar only surfaces if a publish failed and left a change staged. */}
+          {ZONES.some((z) => cap.ethosWrite(z)) && client.pendingChanges().length > 0 && (
             <PublishBar client={client} onChanged={() => setRev((r) => r + 1)} />
           )}
         </>
@@ -164,27 +172,20 @@ function ZoneEditor({
   readonly onChanged: () => void;
 }) {
   const [index, setIndex] = useState<readonly SectionIndexEntry[] | null>(null);
-  const [sections, setSections] = useState<readonly Section[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Lazy: load ONLY the index (titles + readable/writable flags) — never every
+  // body. Each section's content is fetched on demand when the user opens it
+  // (the point of content-addressing: you're never meant to load everything).
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // index() = every persisted section + per-section readable/writable flags;
-      // sections() = decrypted bodies with staged edits applied. We join them so
-      // we can show inaccessible sections (greyed) the way index() exposes them.
-      const [idx, list] = await Promise.all([
-        client.zone(zone).index(),
-        client.zone(zone).sections(),
-      ]);
-      setIndex(idx);
-      setSections(list);
+      setIndex(await client.zone(zone).index());
     } catch (e) {
       setError(formatError(e));
       setIndex(null);
-      setSections(null);
     } finally {
       setLoading(false);
     }
@@ -195,12 +196,48 @@ function ZoneEditor({
     void refresh();
   }, [refresh, rev]);
 
+  // Client-side search + pagination over the (fully-loaded) index. The index
+  // holds every section's title + tags already, so filtering never touches the
+  // network; only bodies are lazy (fetched when a row is opened).
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  // A new query — or switching zones — jumps back to the first page.
+  useEffect(() => {
+    setPage(0);
+  }, [query, zone]);
+
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");
 
-  const handleAdd = () => {
-    if (!title.trim() || !body.trim()) return;
+  // Per-section publish: stage ONE change then publish it on its own, so each
+  // add / edit / delete is a content-addressed delta edition — only that
+  // section's blob is uploaded, every other section carries forward by sha.
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [pubError, setPubError] = useState<string | null>(null);
+
+  const publishNow = useCallback(
+    async (label: string) => {
+      setBusy(true);
+      setPubError(null);
+      setStatus(null);
+      try {
+        const r = await client.publish();
+        setStatus(`${label} — published edition #${r.editionHeight} (delta: only the changed section was uploaded).`);
+      } catch (e) {
+        setPubError(formatError(e));
+      } finally {
+        setBusy(false);
+        onChanged();
+      }
+    },
+    [client, onChanged],
+  );
+
+  const handleAdd = async () => {
+    if (!title.trim() || !body.trim() || busy) return;
+    const t = title;
     client.zone(zone).addSection({
       title,
       body,
@@ -209,20 +246,35 @@ function ZoneEditor({
     setTitle("");
     setBody("");
     setTags("");
-    onChanged();
+    await publishNow(`Added “${t}”`);
   };
 
-  // Decrypted bodies keyed by id, and which ids are persisted (in the index).
-  const byId = new Map((sections ?? []).map((s) => [s.id, s] as const));
-  const persistedIds = new Set((index ?? []).map((e) => e.id));
-  // In sections() but not the index = staged-new adds not yet published.
-  const stagedNew = (sections ?? []).filter((s) => !persistedIds.has(s.id));
-  const nothingToShow =
-    index !== null && index.length === 0 && stagedNew.length === 0 && !loading;
+  // Lazy model: we hold only the index. Each readable row fetches its own body
+  // on demand; there is no staged-new buffer because every add publishes at once.
+  const rows = index ?? [];
+  const q = query.trim().toLowerCase();
+  // Match title + tags, case-insensitive. A sealed section with no clear title
+  // (self, out of scope) is still findable by its id.
+  const filtered = q
+    ? rows.filter((e) =>
+        [e.title ?? "", ...(e.tags ?? []), e.title === undefined ? e.id : ""]
+          .join(" ")
+          .toLowerCase()
+          .includes(q),
+      )
+    : rows;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const rangeStart = filtered.length === 0 ? 0 : safePage * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(filtered.length, safePage * PAGE_SIZE + PAGE_SIZE);
+
+  const nothingToShow = index !== null && index.length === 0 && !loading;
+  const noMatches = index !== null && index.length > 0 && filtered.length === 0 && !loading;
 
   return (
     <div className="stack">
-      {loading && <p>Loading sections…</p>}
+      {loading && <p>Loading index…</p>}
       {error && (
         <div className="warn">
           Couldn't read <code>{zone}</code>: {error}
@@ -242,50 +294,70 @@ function ZoneEditor({
         </p>
       )}
 
-      {/* Every persisted section, in authored order: editable, locked, or
-          pending-delete. Sections this actor can't decrypt show greyed. */}
-      {index?.map((entry) => {
-        if (!entry.readable) {
-          return <LockedSlot key={entry.id} entry={entry} zone={zone} />;
-        }
-        const decrypted = byId.get(entry.id);
-        if (!decrypted) {
-          // Readable but gone from sections() = staged for deletion.
-          return (
-            <div key={entry.id} className="section-card" style={{ opacity: 0.55 }}>
-              <h4 style={{ textDecoration: "line-through" }}>
-                {entry.title ?? entry.id}
-              </h4>
-              <p className="lede">
-                <em>Marked for deletion — publish to apply.</em>
-              </p>
-            </div>
-          );
-        }
-        return (
+      {busy && <p className="lede">Publishing this section…</p>}
+      {status && <div className="success">{status}</div>}
+      {pubError && <div className="error">Publish failed: {pubError}</div>}
+
+      {/* Client-side search over the in-hand index (titles + tags). */}
+      {index && index.length > 0 && (
+        <label className="search">
+          <span>Search {zone}</span>
+          <input
+            type="search"
+            placeholder="Filter by title or tag…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+      )}
+
+      {noMatches && (
+        <p className="lede">
+          No section in <code>{zone}</code> matches “{query.trim()}”.
+        </p>
+      )}
+
+      {/* One page of the index — titles + flags only, never bodies. Each readable
+          row fetches its own content on demand; locked rows can't be decrypted. */}
+      {pageRows.map((entry) =>
+        entry.readable ? (
           <SectionRow
             key={entry.id}
-            section={decrypted}
+            entry={entry}
             zone={zone}
             client={client}
             writable={entry.writable}
-            onChanged={onChanged}
+            busy={busy}
+            publishNow={publishNow}
           />
-        );
-      })}
+        ) : (
+          <LockedSlot key={entry.id} entry={entry} zone={zone} />
+        ),
+      )}
 
-      {/* Locally staged new sections (not yet in the published index). */}
-      {stagedNew.map((s) => (
-        <SectionRow
-          key={s.id}
-          section={s}
-          zone={zone}
-          client={client}
-          writable
-          staged
-          onChanged={onChanged}
-        />
-      ))}
+      {/* Prev/Next pagination — only when the (filtered) list spills past one page. */}
+      {filtered.length > PAGE_SIZE && (
+        <div className="row" style={{ alignItems: "center", gap: 12, marginTop: 8 }}>
+          <button
+            className="secondary"
+            disabled={safePage === 0}
+            onClick={() => setPage(Math.max(0, safePage - 1))}
+          >
+            ← Prev
+          </button>
+          <span className="meta">
+            {rangeStart}–{rangeEnd} of {filtered.length}
+            {q ? " (filtered)" : ""}
+          </span>
+          <button
+            className="secondary"
+            disabled={safePage >= pageCount - 1}
+            onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+          >
+            Next →
+          </button>
+        </div>
+      )}
 
       {canWrite ? (
         <>
@@ -303,8 +375,8 @@ function ZoneEditor({
             <input type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
           </label>
           <div className="row">
-            <button onClick={handleAdd} disabled={!title || !body}>
-              Stage add
+            <button onClick={handleAdd} disabled={!title || !body || busy}>
+              {busy ? "Publishing…" : "Add & publish"}
             </button>
           </div>
         </>
@@ -322,102 +394,162 @@ function ZoneEditor({
 /* -------------------------------------------------------------------------- */
 
 function SectionRow({
-  section,
+  entry,
   zone,
   client,
   writable,
-  staged,
-  onChanged,
+  busy,
+  publishNow,
 }: {
-  readonly section: Section;
+  /** Index entry — title + flags only; the body is fetched lazily on Open. */
+  readonly entry: SectionIndexEntry;
   readonly zone: ZoneName;
   readonly client: EthosClient;
   /** This actor's mandate authorizes editing THIS section (owner: always). */
   readonly writable: boolean;
-  /** True for a locally-staged, not-yet-published section. */
-  readonly staged?: boolean;
-  readonly onChanged: () => void;
+  /** A publish is in flight — disable this row's actions. */
+  readonly busy: boolean;
+  /** Stage-then-publish helper (per-section delta upload). */
+  readonly publishNow: (label: string) => Promise<void>;
 }) {
+  // Lazy body: `undefined` = collapsed, never fetched; `null` = opened but the
+  // section came back empty / gone; `Section` = loaded. Opening fetches THIS
+  // section alone — the whole point of content-addressing.
+  const [body, setBody] = useState<Section | null | undefined>(undefined);
+  const [opening, setOpening] = useState(false);
+  const [openErr, setOpenErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(section.title);
-  const [body, setBody] = useState(section.body);
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
 
-  if (!editing) {
+  const open = useCallback(async () => {
+    setOpening(true);
+    setOpenErr(null);
+    try {
+      setBody(await client.zone(zone).section(entry.id));
+    } catch (e) {
+      setOpenErr(formatError(e));
+    } finally {
+      setOpening(false);
+    }
+  }, [client, zone, entry.id]);
+
+  // Collapsed — only the index title is known; no body has been loaded.
+  if (body === undefined) {
     return (
       <div className="section-card">
-        <h4>
-          {section.title}
-          {staged && (
-            <span className="tag" style={{ marginLeft: 8, opacity: 0.7 }}>
-              staged
-            </span>
-          )}
-        </h4>
-        <p className="body">{section.body}</p>
+        <h4>{entry.title ?? entry.id}</h4>
         <div className="meta">
-          id: <code>{section.id}</code>
-          {section.tags && section.tags.length > 0 ? <> · tags: {section.tags.join(", ")}</> : null}
+          id: <code>{entry.id}</code>
         </div>
-        {writable ? (
-          <div className="row" style={{ marginTop: 8 }}>
+        {openErr && <div className="error">{openErr}</div>}
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="secondary" disabled={opening} onClick={() => void open()}>
+            {opening ? "Opening…" : "Open"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Opened but nothing came back (just deleted, or not found).
+  if (body === null) {
+    return (
+      <div className="section-card" style={{ opacity: 0.6 }}>
+        <h4>{entry.title ?? entry.id}</h4>
+        <p className="lede">
+          <em>Section is empty or no longer available.</em>
+        </p>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="secondary" disabled={opening} onClick={() => setBody(undefined)}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Opened + editing.
+  if (editing) {
+    return (
+      <div className="section-card">
+        <label>
+          <span>Title</span>
+          <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+        </label>
+        <label>
+          <span>Body</span>
+          <textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} />
+        </label>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button
+            disabled={busy}
+            onClick={async () => {
+              const patch: { title?: string; body?: string } = {};
+              if (editTitle !== body.title) patch.title = editTitle;
+              if (editBody !== body.body) patch.body = editBody;
+              setEditing(false);
+              if (Object.keys(patch).length > 0) {
+                client.zone(zone).updateSection(entry.id, patch);
+                await publishNow(`Updated “${body.title}”`);
+                await open(); // reload just this section's new blob
+              }
+            }}
+          >
+            {busy ? "Publishing…" : "Save & publish"}
+          </button>
+          <button className="secondary" disabled={busy} onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Opened, viewing.
+  return (
+    <div className="section-card">
+      <h4>{body.title}</h4>
+      <p className="body">{body.body}</p>
+      <div className="meta">
+        id: <code>{body.id}</code>
+        {body.tags && body.tags.length > 0 ? <> · tags: {body.tags.join(", ")}</> : null}
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="secondary" disabled={busy} onClick={() => setBody(undefined)}>
+          Close
+        </button>
+        {writable && (
+          <>
             <button
               className="secondary"
+              disabled={busy}
               onClick={() => {
                 setEditing(true);
-                setTitle(section.title);
-                setBody(section.body);
+                setEditTitle(body.title);
+                setEditBody(body.body);
               }}
             >
               Edit
             </button>
             <button
               className="danger"
-              onClick={() => {
-                client.zone(zone).deleteSection(section.id);
-                onChanged();
+              disabled={busy}
+              onClick={async () => {
+                client.zone(zone).deleteSection(entry.id);
+                await publishNow(`Deleted “${body.title}”`);
               }}
             >
-              Stage delete
+              {busy ? "Publishing…" : "Delete & publish"}
             </button>
-          </div>
-        ) : (
-          <p className="meta" style={{ marginTop: 8 }}>
-            <em>Readable, but your mandate can't edit this section.</em>
-          </p>
+          </>
         )}
       </div>
-    );
-  }
-
-  return (
-    <div className="section-card">
-      <label>
-        <span>Title</span>
-        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
-      </label>
-      <label>
-        <span>Body</span>
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} />
-      </label>
-      <div className="row" style={{ marginTop: 8 }}>
-        <button
-          onClick={() => {
-            const patch: { title?: string; body?: string } = {};
-            if (title !== section.title) patch.title = title;
-            if (body !== section.body) patch.body = body;
-            if (Object.keys(patch).length > 0) {
-              client.zone(zone).updateSection(section.id, patch);
-              onChanged();
-            }
-            setEditing(false);
-          }}
-        >
-          Stage update
-        </button>
-        <button className="secondary" onClick={() => setEditing(false)}>
-          Cancel
-        </button>
-      </div>
+      {!writable && (
+        <p className="meta" style={{ marginTop: 8 }}>
+          <em>Readable, but your mandate can't edit this section.</em>
+        </p>
+      )}
     </div>
   );
 }
@@ -472,7 +604,7 @@ function PublishBar({
 
   return (
     <div style={{ marginTop: 16 }}>
-      <h3>Pending changes ({pending.length})</h3>
+      <h3>Unpublished changes ({pending.length}) — retry or discard</h3>
       {pending.length === 0 ? (
         <p className="lede">Nothing staged.</p>
       ) : (

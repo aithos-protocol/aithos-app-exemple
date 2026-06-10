@@ -46,6 +46,7 @@ import { useActor } from "../actor-context.js";
 
 import {
   createAssetsClient,
+  DEV_SDK_ENDPOINTS,
   type AssetBrief,
   type AssetsClient,
 } from "@aithos/sdk";
@@ -64,7 +65,7 @@ import { formatError } from "./Home.js";
 const ASSETS_PDS_URL =
   (typeof import.meta.env.VITE_AITHOS_ASSETS_PDS_URL === "string" &&
     import.meta.env.VITE_AITHOS_ASSETS_PDS_URL) ||
-  "https://assets.aithos.be";
+  (import.meta.env.VITE_AITHOS_ENV === "prod" ? "https://assets.aithos.be" : DEV_SDK_ENDPOINTS.assets);
 
 // CloudFront distribution that fronts the public-regime S3 bucket of
 // the assets PDS. Used to render public images via `<img src={...}>`
@@ -75,7 +76,12 @@ const ASSETS_PDS_URL =
 const ASSETS_PUBLIC_CDN_DOMAIN =
   (typeof import.meta.env.VITE_AITHOS_ASSETS_PUBLIC_CDN_DOMAIN === "string" &&
     import.meta.env.VITE_AITHOS_ASSETS_PUBLIC_CDN_DOMAIN) ||
-  "d3sc3ay3heqzig.cloudfront.net";
+  (import.meta.env.VITE_AITHOS_ENV === "prod"
+    ? "d3sc3ay3heqzig.cloudfront.net"
+    : // Dev assets CloudFront distribution is infra-specific (a different
+      // distribution than prod). Best-effort dev default — override with
+      // VITE_AITHOS_ASSETS_PUBLIC_CDN_DOMAIN if your dev distribution differs.
+      new URL(DEV_SDK_ENDPOINTS.cdn).host);
 
 /**
  * Compose the stable CloudFront URL for a public asset from its URN.

@@ -50,10 +50,13 @@ import { vendorLites } from "./components/DataPlayground.js";
 export const APP_DID =
   "did:aithos:z6Mkm6tHeRiM1546AJEj8G1JP7qWhqJPnPshVJL14DWAC9q7";
 
+// Follow the SAME env switch as the SDK endpoints below: dev by default, prod only
+// when VITE_AITHOS_ENV=prod (or an explicit VITE_AITHOS_PDS_URL override). Hardcoding
+// prod here sent the #data client to prod while the rest of the app ran on dev.
 const PDS_URL =
   (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
     import.meta.env.VITE_AITHOS_PDS_URL) ||
-  "https://pds.aithos.be";
+  (import.meta.env.VITE_AITHOS_ENV === "prod" ? "https://pds.aithos.be" : DEV_SDK_ENDPOINTS.pds);
 
 export type ZoneName = "public" | "circle" | "self";
 export type DataAction = "read" | "write" | "admin" | "append";
@@ -308,6 +311,13 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
   }, [actor]);
 
   const dataClient = useMemo<DataClient | ReadonlyDataClient | null>(() => {
+    // Don't touch the auth session until resume() has rehydrated it. The
+    // actor-derive effect can set `actor` from the KEYSTORE before resume() has
+    // populated the in-memory owner/delegate registry; computing the client
+    // then would call delegateDataClient on an empty registry and throw
+    // "mandate not active in this session" DURING RENDER — crashing the whole
+    // app on refresh (the dataClient useMemo runs before the `!ready` guard).
+    if (!ready) return null;
     if (!actor) return null;
     if (actor.kind === "owner") {
       if (!ownerDataSeedHex) return null;
@@ -318,15 +328,20 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
     }
     if (!delegateKeys) return null;
     // Delegate path needs the mandate imported into the auth session
-    // (auth.importMandate). The client is resolved from session state, not the
-    // raw delegate seed.
-    return auth.delegateDataClient({
-      subjectDid: delegateKeys.subjectDid,
-      mandateId: delegateKeys.mandateId,
-      pdsUrl: PDS_URL,
-      schemas: vendorLites(),
-    });
-  }, [actor, auth, ownerDataSeedHex, delegateKeys]);
+    // (auth.importMandate / rehydrated by resume()). Guard against a transient
+    // keystore↔session mismatch so a missing session entry degrades to "no
+    // client" instead of throwing during render.
+    try {
+      return auth.delegateDataClient({
+        subjectDid: delegateKeys.subjectDid,
+        mandateId: delegateKeys.mandateId,
+        pdsUrl: PDS_URL,
+        schemas: vendorLites(),
+      });
+    } catch {
+      return null;
+    }
+  }, [ready, actor, auth, ownerDataSeedHex, delegateKeys]);
 
   const getEthosClient = useCallback(async (): Promise<EthosClient> => {
     if (!actor) throw new Error("no actor signed in");

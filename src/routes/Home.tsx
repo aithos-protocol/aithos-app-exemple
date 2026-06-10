@@ -15,10 +15,34 @@
 
 import { useState, type ChangeEvent } from "react";
 
-import { AithosSDKError } from "@aithos/sdk";
+import { AithosSDKError, type AithosAuth } from "@aithos/sdk";
 import { runOnboarding } from "@aithos/protocol-client";
 
 import { useActor } from "../actor-context.js";
+
+/**
+ * Route an uploaded JSON to the right importer by sniffing its version field, so
+ * a delegate bundle dropped on the Recovery tab (or a recovery file on the
+ * Mandate tab) still works instead of failing with a confusing parser error
+ * (e.g. "unsupported aithos_recovery_version: undefined" on a delegate file).
+ */
+async function importOwnerOrDelegate(auth: AithosAuth, file: File): Promise<void> {
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(await file.text()) as Record<string, unknown>;
+  } catch {
+    throw new Error("That file isn't valid JSON.");
+  }
+  if (typeof obj["aithos_delegate_version"] === "string") {
+    await auth.importMandate({ bundle: file }); // become the mandate's delegate
+  } else if (typeof obj["aithos_recovery_version"] === "string") {
+    await auth.signInWithRecovery({ file }); // restore the owner
+  } else {
+    throw new Error(
+      "Unrecognized file — expected an aithos-recovery-*.json (owner) or an aithos-delegate-*.json (mandate).",
+    );
+  }
+}
 
 export function Home() {
   const { actor } = useActor();
@@ -220,7 +244,8 @@ function RecoveryUpload() {
     setBusy(true);
     setError(null);
     try {
-      await auth.signInWithRecovery({ file: f });
+      // Sniff + route: a delegate bundle dropped here still works.
+      await importOwnerOrDelegate(auth, f);
       bump();
     } catch (err) {
       setError(formatError(err));
@@ -256,7 +281,8 @@ function MandateImport() {
     setBusy(true);
     setError(null);
     try {
-      await auth.importMandate({ bundle: f });
+      // Sniff + route: a recovery file dropped here still works.
+      await importOwnerOrDelegate(auth, f);
       bump();
     } catch (err) {
       setError(formatError(err));
