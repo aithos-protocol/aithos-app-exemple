@@ -15,7 +15,6 @@
 import { useEffect, useState } from "react";
 
 import type { DataClient, MintedMandate, OwnedMandate, Scope, SectionIndexEntry } from "@aithos/sdk";
-import type { SignedMandate } from "@aithos/protocol-client";
 
 import { useActor, type ZoneName } from "../actor-context.js";
 import { formatError } from "./Home.js";
@@ -267,19 +266,16 @@ function CreateMandateForm({ onCreated }: { readonly onCreated: () => void }) {
       // Re-wrap the CMK for read/write/admin data grants (append is lateral).
       // Each collection's re-wrap is independent — run them IN PARALLEL: the
       // sequential version cost N back-to-back round-trips for N collections.
-      // TODO(sdk >= alpha.76): use `r.mandate` directly, no Blob re-parse.
       const dataAuth: Minted["dataAuth"] = [];
       let list: { collection: string; action: string; ok: boolean; detail?: string }[] = [];
       if (owner) {
-        const bundle = JSON.parse(await r.bundle.text()) as { mandate: unknown };
-        const mandate = bundle.mandate as SignedMandate;
         const targets = Object.entries(grants).filter(
           ([, a]) => a !== "none" && a !== "append",
         );
         list = await Promise.all(
           targets.map(async ([col, a]) => {
             try {
-              await owner.authorizeDelegate({ collectionName: col, mandate });
+              await owner.authorizeDelegate({ collectionName: col, mandate: r.mandate });
               return { collection: col, action: a, ok: true };
             } catch (e) {
               return { collection: col, action: a, ok: false, detail: formatError(e) };
@@ -289,14 +285,13 @@ function CreateMandateForm({ onCreated }: { readonly onCreated: () => void }) {
       }
       // Auto-seal: a mandate only AUTHORISES — a delegate can DECRYPT a granted
       // section only once it's (re)sealed with its wrap. Do it now so "issue →
-      // delegate reads" is one step. Cheap: protocol-client re-wraps the granted
-      // sections (no re-encryption, zero blob upload).
-      // TODO(sdk >= alpha.76): make the seal race-proof against the eventually-
-      // consistent list_mandates index by passing the fresh mandate explicitly:
-      //   sdk.ethos.me().reseal({ includeMandates: [r.mandate] })
+      // delegate reads" is one step. Cheap + race-proof: the fresh mandate is
+      // passed IN-HAND (includeMandates) so the seal never depends on the
+      // eventually-consistent list_mandates index, and the additive default
+      // (sdk >= alpha.77) can't jam on a lingering revoked wrap.
       if (hasEthos) {
         try {
-          const sealed = await sdk.ethos.me().reseal();
+          const sealed = await sdk.ethos.me().reseal({ includeMandates: [r.mandate] });
           if (sealed) setResealNote(`Delegates sealed in — edition #${sealed.editionHeight}.`);
         } catch (e) {
           setResealNote(
@@ -805,7 +800,9 @@ function RotateKeysRow() {
           setError(null);
           setNote(null);
           try {
-            const sealed = await sdk.ethos.me().reseal();
+            // mode:"rotate" is the explicit hard-cut — the only path that
+            // removes recipients + rotates DEKs (normal publishes are additive).
+            const sealed = await sdk.ethos.me().reseal({ mode: "rotate" });
             setNote(
               sealed
                 ? `Keys rotated — edition #${sealed.editionHeight}.`
