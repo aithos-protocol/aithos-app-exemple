@@ -697,6 +697,7 @@ function IssuedMandates({ refreshTick }: { readonly refreshTick: number }) {
       {error && <div className="error">{error}</div>}
       {!list && !error && <p>Loading…</p>}
       {list && list.length === 0 && <p className="lede">None yet.</p>}
+      {list && list.length > 0 && <RevokeAllRow onDone={() => setTick((t) => t + 1)} />}
       {list?.map((m) => (
         <div
           key={m.mandateId}
@@ -735,6 +736,42 @@ function IssuedMandates({ refreshTick }: { readonly refreshTick: number }) {
         </div>
       ))}
     </section>
+  );
+}
+
+/** One-write "revoke ALL" — bumps the revocation epoch on the did.json. */
+function RevokeAllRow({ onDone }: { readonly onDone: () => void }) {
+  const { sdk } = useActor();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="row" style={{ marginBottom: 10 }}>
+      <button
+        className="secondary"
+        disabled={busy}
+        title="Sets the revocation epoch: every mandate issued before now becomes void in ONE signed write — no per-mandate enumeration. Wraps are cleaned by the background prune; 'Rotate keys' remains the cryptographic cut."
+        onClick={async () => {
+          if (!confirm("Void EVERY mandate issued until now? Delegates lose access immediately.")) return;
+          setBusy(true);
+          setError(null);
+          setNote(null);
+          try {
+            const r = await sdk.mandates.revokeAll();
+            setNote(`Epoch set — every mandate issued before ${new Date(r.mandatesVoidBefore).toLocaleString()} is void.`);
+            onDone();
+          } catch (e) {
+            setError(formatError(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Revoking all…" : "Revoke ALL (epoch)"}
+      </button>
+      {note && <span className="meta" style={{ marginLeft: 8 }}>{note}</span>}
+      {error && <div className="error">{error}</div>}
+    </div>
   );
 }
 
