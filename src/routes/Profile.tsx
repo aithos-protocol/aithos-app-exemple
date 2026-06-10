@@ -34,7 +34,7 @@ const ZONES: readonly ZoneName[] = ["public", "circle", "self"];
 const PAGE_SIZE = 20;
 
 export function Profile() {
-  const { actor, capabilities: cap, getEthosClient } = useActor();
+  const { actor, capabilities: cap, getEthosClient, auth } = useActor();
   const [client, setClient] = useState<EthosClient | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   // Local re-render trigger: bumped after every stage / publish so the editor
@@ -51,8 +51,21 @@ export function Profile() {
     }
   }, [readableZones, zone]);
 
-  // Build the EthosClient once per subject. Stable across context bumps.
+  // Build the EthosClient once per (subject × session delegate-set). The
+  // registry fingerprint matters: `sdk.ethos.of()` resolves its actor at BUILD
+  // time, so a client created in an instant where the auth session's delegate
+  // registry didn't (yet) hold the mandate comes out ANONYMOUS — and sticks.
+  // Symptom of that stuck state: circle titles render (the anonymous index is
+  // spec-true since sdk alpha.83) but every Open returns null WITHOUT a single
+  // network request. Re-keying on the registry rebuilds the client the moment
+  // the delegate set changes (import / remove / sign-in) — auth mutations only,
+  // so the staged-buffer stability promise below still holds between edits.
   const subjectKey = actor ? `${actor.kind}:${actor.subjectDid}` : null;
+  const registryKey = auth
+    .getDelegates()
+    .map((d) => d.mandateId)
+    .sort()
+    .join("|");
   useEffect(() => {
     if (!actor) {
       setClient(null);
@@ -71,9 +84,9 @@ export function Profile() {
     return () => {
       cancelled = true;
     };
-    // Intentionally keyed on the stable subject identity only.
+    // Keyed on the stable subject identity + the session's delegate set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subjectKey]);
+  }, [subjectKey, registryKey]);
 
   if (!actor) {
     return (
@@ -132,6 +145,21 @@ export function Profile() {
 
       {loadErr && <div className="error">{loadErr}</div>}
       {!client && !loadErr && <p>Opening ethos client…</p>}
+      {client && client.mode !== actor.kind && (
+        <div className="error">
+          ⚠ The Ethos client runs in <strong>{client.mode}</strong> mode while you are signed in
+          as a <strong>{actor.kind}</strong>
+          {actor.kind === "delegate" && (
+            <>
+              {" "}
+              — the session holds no active mandate matching subject{" "}
+              <code>{actor.subjectDid}</code>. Encrypted zones will list titles but every section
+              opens empty, with no network request. Re-import the bundle on the Home page, then
+              reload.
+            </>
+          )}
+        </div>
+      )}
       {client && (
         <>
           <ZoneEditor
@@ -435,6 +463,54 @@ function SectionRow({
     }
   }, [client, zone, entry.id]);
 
+  // On-screen diagnoser for the "opened but null" state: dumps the client mode,
+  // the session's delegate registry, then re-runs the read with an instrumented
+  // fetch to count network calls. "ZERO requests" proves the client is serving
+  // the null locally (anonymous mode / short-circuit) rather than being denied
+  // by the platform — the decisive split when hunting decrypt failures.
+  const { auth } = useActor();
+  const [diag, setDiag] = useState<string | null>(null);
+  const runDiag = useCallback(async () => {
+    const lines: string[] = [];
+    lines.push(`client.mode = ${client.mode}`);
+    lines.push(`subject     = ${client.subjectDid}`);
+    lines.push(`row.readable = ${String(entry.readable)}`);
+    const dels = auth.getDelegates();
+    lines.push(
+      dels.length === 0
+        ? "session delegates = NONE (registry empty — resume()/import never landed here)"
+        : `session delegates = ${dels
+            .map(
+              (d) =>
+                `${d.mandateId} [subject ${d.subjectDid === client.subjectDid ? "matches" : "≠ MISMATCH"}, expires ${d.expiresAt ?? "never"}]`,
+            )
+            .join(" · ")}`,
+    );
+    const calls: string[] = [];
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      try {
+        calls.push((JSON.parse(String(init?.body ?? "{}")) as { method?: string }).method ?? "blob");
+      } catch {
+        calls.push("blob");
+      }
+      return realFetch(input, init);
+    };
+    try {
+      const sec = await client.zone(zone).section(entry.id);
+      lines.push(
+        `re-read → ${sec ? "BODY OK" : "null"} | network: ${
+          calls.length === 0 ? "ZERO requests ⟵ local short-circuit (anonymous client?)" : calls.join(", ")
+        }`,
+      );
+    } catch (e) {
+      lines.push(`re-read threw: ${formatError(e)} | network: ${calls.join(", ") || "none"}`);
+    } finally {
+      window.fetch = realFetch;
+    }
+    setDiag(lines.join("\n"));
+  }, [auth, client, zone, entry.id, entry.readable]);
+
   // Collapsed — only the index title is known; no body has been loaded.
   if (body === undefined) {
     return (
@@ -462,7 +538,9 @@ function SectionRow({
     );
   }
 
-  // Opened but nothing came back (just deleted, or not found).
+  // Opened but nothing came back (just deleted, or not found). This state is
+  // ALSO what a mode mismatch looks like (an anonymous client null-shorts every
+  // encrypted read with zero network), so it carries its own diagnoser.
   if (body === null) {
     return (
       <div className="section-card" style={{ opacity: 0.6 }}>
@@ -470,9 +548,13 @@ function SectionRow({
         <p className="lede">
           <em>Section is empty or no longer available.</em>
         </p>
+        {diag && <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{diag}</pre>}
         <div className="row" style={{ marginTop: 8 }}>
           <button className="secondary" disabled={opening} onClick={() => setBody(undefined)}>
             Close
+          </button>
+          <button className="secondary" disabled={opening} onClick={() => void runDiag()}>
+            Diagnose
           </button>
         </div>
       </div>
