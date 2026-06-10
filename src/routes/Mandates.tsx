@@ -265,25 +265,35 @@ function CreateMandateForm({ onCreated }: { readonly onCreated: () => void }) {
       });
 
       // Re-wrap the CMK for read/write/admin data grants (append is lateral).
+      // Each collection's re-wrap is independent — run them IN PARALLEL: the
+      // sequential version cost N back-to-back round-trips for N collections.
+      // TODO(sdk >= alpha.76): use `r.mandate` directly, no Blob re-parse.
       const dataAuth: Minted["dataAuth"] = [];
-      const list: { collection: string; action: string; ok: boolean; detail?: string }[] = [];
+      let list: { collection: string; action: string; ok: boolean; detail?: string }[] = [];
       if (owner) {
         const bundle = JSON.parse(await r.bundle.text()) as { mandate: unknown };
         const mandate = bundle.mandate as SignedMandate;
-        for (const [col, a] of Object.entries(grants)) {
-          if (a === "none" || a === "append") continue;
-          try {
-            await owner.authorizeDelegate({ collectionName: col, mandate });
-            list.push({ collection: col, action: a, ok: true });
-          } catch (e) {
-            list.push({ collection: col, action: a, ok: false, detail: formatError(e) });
-          }
-        }
+        const targets = Object.entries(grants).filter(
+          ([, a]) => a !== "none" && a !== "append",
+        );
+        list = await Promise.all(
+          targets.map(async ([col, a]) => {
+            try {
+              await owner.authorizeDelegate({ collectionName: col, mandate });
+              return { collection: col, action: a, ok: true };
+            } catch (e) {
+              return { collection: col, action: a, ok: false, detail: formatError(e) };
+            }
+          }),
+        );
       }
       // Auto-seal: a mandate only AUTHORISES — a delegate can DECRYPT a granted
       // section only once it's (re)sealed with its wrap. Do it now so "issue →
       // delegate reads" is one step. Cheap: protocol-client re-wraps the granted
       // sections (no re-encryption, zero blob upload).
+      // TODO(sdk >= alpha.76): make the seal race-proof against the eventually-
+      // consistent list_mandates index by passing the fresh mandate explicitly:
+      //   sdk.ethos.me().reseal({ includeMandates: [r.mandate] })
       if (hasEthos) {
         try {
           const sealed = await sdk.ethos.me().reseal();

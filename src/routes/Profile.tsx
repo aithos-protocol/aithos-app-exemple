@@ -492,7 +492,12 @@ function SectionRow({
               if (Object.keys(patch).length > 0) {
                 client.zone(zone).updateSection(entry.id, patch);
                 await publishNow(`Updated “${body.title}”`);
-                await open(); // reload just this section's new blob
+                // The publish succeeded with EXACTLY this content — render it
+                // locally instead of re-downloading the blob we just uploaded
+                // (saves one read RPC and makes the save feel instant). SDK
+                // >= alpha.76 also re-seeds its caches from the publish, so a
+                // later re-open is served locally either way.
+                setBody({ ...body, ...patch });
               }
             }}
           >
