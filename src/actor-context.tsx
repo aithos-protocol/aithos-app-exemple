@@ -250,12 +250,28 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
         if (!cancelled) {
           setReady(true);
           bump();
+          // Background wrap pruning — once per owner session, fire-and-forget.
+          // Drops revoked/expired mandates' wraps from the manifest (metadata
+          // hygiene under the additive doctrine: the server already gates dead
+          // reads; the crypto cut stays the explicit Rotate keys). Steady state
+          // costs one list_mandates and publishes nothing.
+          if (auth.getOwnerInfo()) {
+            sdk.ethos
+              .me()
+              .pruneWraps()
+              .then((r) => {
+                if (r) console.info(`[aithos] pruned dead wraps — edition #${r.editionHeight}`);
+              })
+              .catch(() => {
+                /* hygiene only — never surface */
+              });
+          }
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [auth, bump]);
+  }, [auth, sdk, bump]);
 
   // Re-derive the single actor whenever auth state changes (version bump).
   useEffect(() => {

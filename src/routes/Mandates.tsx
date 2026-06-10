@@ -284,15 +284,15 @@ function CreateMandateForm({ onCreated }: { readonly onCreated: () => void }) {
         );
       }
       // Auto-seal: a mandate only AUTHORISES — a delegate can DECRYPT a granted
-      // section only once it's (re)sealed with its wrap. Do it now so "issue →
-      // delegate reads" is one step. Cheap + race-proof: the fresh mandate is
-      // passed IN-HAND (includeMandates) so the seal never depends on the
-      // eventually-consistent list_mandates index, and the additive default
-      // (sdk >= alpha.77) can't jam on a lingering revoked wrap.
+      // section only once it's (re)sealed with its wrap. sealGrant (sdk >=
+      // alpha.78) is the targeted fast path: seals THIS mandate into its
+      // covered sections only — zero mandate crawl (scales with the ethos, not
+      // with how many mandates exist), zero blob upload, race-proof by
+      // construction, can't jam on revoked residue (additive).
       if (hasEthos) {
         try {
-          const sealed = await sdk.ethos.me().reseal({ includeMandates: [r.mandate] });
-          if (sealed) setResealNote(`Delegates sealed in — edition #${sealed.editionHeight}.`);
+          const sealed = await sdk.ethos.me().sealGrant(r.mandate);
+          if (sealed) setResealNote(`Delegate sealed in — edition #${sealed.editionHeight}.`);
         } catch (e) {
           setResealNote(
             `Mandate created, but auto-seal failed (${formatError(e)}). Open Profile and edit + publish the granted zone once.`,
