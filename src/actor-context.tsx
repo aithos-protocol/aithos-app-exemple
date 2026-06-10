@@ -295,7 +295,14 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
       const dels = await keyStore.listDelegates().catch(() => []);
       if (cancelled) return;
       if (dels.length > 0) {
-        const d = dels[0]!;
+        // The MOST RECENTLY IMPORTED bundle is the one the user means to act
+        // under. The previous `dels[0]` (oldest stored) let a stale bundle
+        // from earlier sessions shadow a fresh grant: titles rendered but
+        // nothing decrypted. (Per-subject refinement — non-expired, newest
+        // issued — lives in the SDK's pickDelegateActor for ethos.of().)
+        const d = [...dels].sort(
+          (x, y) => Date.parse(y.importedAt ?? 0) - Date.parse(x.importedAt ?? 0),
+        )[0]!;
         const info: DelegateInfo | undefined = auth
           .getDelegates()
           .find((x) => x.mandateId === d.mandateId);
