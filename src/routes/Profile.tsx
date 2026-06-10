@@ -105,7 +105,8 @@ export function Profile() {
         {actor.kind === "delegate" && (
           <>
             {" "}
-            with <code>{actor.scopes.join(", ")}</code>
+            with <code>{actor.scopes.join(", ")}</code> — mandate{" "}
+            <code>{actor.mandateId}</code>
           </>
         )}
         .
