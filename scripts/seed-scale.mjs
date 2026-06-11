@@ -51,6 +51,9 @@ async function ownerSdk(state) {
   const sdk = new AithosSDK({
     auth,
     appDid: "did:aithos:scale-harness",
+    // v0.4 opt-in (AITHOS_V04=1): owner publishes migrate-then-patch. Left
+    // OFF for the v0.3 baseline half of the before/after run.
+    ...(process.env.AITHOS_V04 === "1" ? { ethosV04: true } : {}),
     endpoints: { api: API_URL, cdn: CDN_URL },
   });
   await auth.signInWithRecovery({ file: state.recovery });
@@ -189,9 +192,10 @@ if (cmd === "init") {
   try {
     const idx2 = await dClient2.zone(zone).index();
     const r2 = idx2.find((r) => r.readable);
-    if (r2) await dClient2.zone(zone).section(r2.id);
-    // a fully-missing readable set also counts as blocked
-    blocked = !r2;
+    // alpha.83 contract: a server-side denial reads as NULL (not a throw) —
+    // the assertion must check the BODY, not just the index row.
+    const body2 = r2 ? await dClient2.zone(zone).section(r2.id) : null;
+    blocked = !r2 || body2 === null;
   } catch {
     blocked = true;
   }
@@ -208,6 +212,19 @@ if (cmd === "init") {
   console.log(`pruneWraps steady-state → ${again ? "PUBLISHED (unexpected)" : "null ✓"} in ${ms(a)}`);
 
   saveState(state);
+} else if (cmd === "migrate") {
+  const state = loadState();
+  if (!state) throw new Error("run init first");
+  const { sdk } = await ownerSdk(state);
+  const a = t0();
+  const r = await sdk.ethos.me().migrateToV04();
+  if (!r) {
+    console.log("migrate: nothing to do (already v0.4 or no edition)");
+  } else {
+    console.log(`migrate: v0.3→v0.4 in ${ms(a)} — edition #${r.editionHeight}`);
+    state.v04 = true;
+    saveState(state);
+  }
 } else if (cmd === "summary") {
   const state = loadState();
   console.log(JSON.stringify({ did: state.did, seeded: state.seeded, timings: state.timings }, null, 1));
