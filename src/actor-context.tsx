@@ -175,7 +175,9 @@ function delegateCapabilities(scopes: readonly string[]): Capabilities {
 
   return {
     isOwner: false,
-    ethosRead: (zone) => anyEthosScope(scopes, zone, ETHOS_READ_VERBS, true),
+    // public is readable by ANYONE per the protocol (the anonymous surface) —
+    // a delegate never needs a scope for it. Encrypted zones keep the gate.
+    ethosRead: (zone) => zone === "public" || anyEthosScope(scopes, zone, ETHOS_READ_VERBS, true),
     ethosWrite: (zone) => anyEthosScope(scopes, zone, ETHOS_WRITE_VERBS, false),
     dataCan: dataScopeAllows,
     canIssueMandates: false,
