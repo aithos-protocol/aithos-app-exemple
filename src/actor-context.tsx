@@ -224,6 +224,11 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
     new AithosSDK({
       auth,
       appDid: APP_DID,
+      // Bundle v0.4 opt-in: the FIRST owner publish on a v0.3 subject migrates
+      // it (one extra edition, irreversible — the platform refuses later v0.3
+      // editions). This app is the v0.4 showcase; default SDK behaviour stays
+      // v0.3-compatible for other hosts.
+      ethosV04: true,
       ...(import.meta.env.VITE_AITHOS_ENV === "prod" ? {} : { endpoints: DEV_SDK_ENDPOINTS }),
     }),
   );
