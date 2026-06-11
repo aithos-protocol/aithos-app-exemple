@@ -27,7 +27,9 @@ import { formatError } from "./Home.js";
 const TEXT_MODELS = [
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — balanced" },
-  { id: "claude-opus-4-7", label: "Claude Opus 4.7 — best" },
+  // claude-opus-4-7 is NOT on the compute-proxy allowlist (requires an AWS
+  // Sales engagement) — keep the picker aligned with what dev can serve.
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6 — best" },
 ];
 
 const IMAGE_MODELS: ReadonlyArray<{ id: ImageModelId; label: string }> = [
