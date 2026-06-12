@@ -23,6 +23,17 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useActor } from "../actor-context.js";
 import { formatError } from "./Home.js";
 
+// App credential for the custodial endpoints. Two options:
+//   - VITE_AITHOS_PUBLIC_KEY (pk_…)     — browser-safe, set on the AithosAuth
+//     constructor in actor-context (preferred).
+//   - VITE_AITHOS_API_KEY (aithos_…)    — the app's SECRET key. Server-only
+//     in principle; tolerated here as a DEV/TEST convenience (.env.local,
+//     never committed). Rotate it from the builders console if it leaks.
+const APP_API_KEY: string | undefined =
+  typeof import.meta.env.VITE_AITHOS_API_KEY === "string" && import.meta.env.VITE_AITHOS_API_KEY
+    ? import.meta.env.VITE_AITHOS_API_KEY
+    : undefined;
+
 /* -------------------------------------------------------------------------- */
 /*  Home tab — sign-up / sign-in / forgot                                      */
 /* -------------------------------------------------------------------------- */
@@ -67,6 +78,7 @@ function CustodialSignUp() {
         email: email.trim(),
         password,
         ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
+        ...(APP_API_KEY ? { apiKey: APP_API_KEY } : {}),
       });
       setPending({ email: r.email, mailSent: r.mailSent });
     } catch (e) {
@@ -81,7 +93,10 @@ function CustodialSignUp() {
     setBusy(true);
     setError(null);
     try {
-      await auth.resendVerificationEmail({ email: pending.email });
+      await auth.resendVerificationEmail({
+        email: pending.email,
+        ...(APP_API_KEY ? { apiKey: APP_API_KEY } : {}),
+      });
       setPending({ ...pending, mailSent: true });
     } catch (e) {
       setError(formatError(e));
@@ -135,11 +150,11 @@ function CustodialSignUp() {
         Display name (optional)
         <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </label>
-      <button onClick={submit} disabled={busy || !email.includes("@") || password.length < 8}>
+      <button onClick={submit} disabled={busy || !email.includes("@") || password.length < 10}>
         {busy ? "Creating…" : "Create account"}
       </button>
-      {password.length > 0 && password.length < 8 && (
-        <p className="error">Password must be at least 8 characters.</p>
+      {password.length > 0 && password.length < 10 && (
+        <p className="error">Password must be at least 10 characters (letters + digits/symbols).</p>
       )}
       {error && <p className="error">{error}</p>}
     </div>
@@ -348,11 +363,11 @@ export function ResetPage() {
         New password
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
       </label>
-      <button onClick={submit} disabled={busy || password.length < 8}>
+      <button onClick={submit} disabled={busy || password.length < 10}>
         {busy ? "Applying…" : "Set password & sign in"}
       </button>
-      {password.length > 0 && password.length < 8 && (
-        <p className="error">Password must be at least 8 characters.</p>
+      {password.length > 0 && password.length < 10 && (
+        <p className="error">Password must be at least 10 characters (letters + digits/symbols).</p>
       )}
       {error && <p className="error">{error}</p>}
     </section>
