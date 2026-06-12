@@ -18,6 +18,7 @@ import { useState, type ChangeEvent } from "react";
 import { AithosSDKError, type AithosAuth } from "@aithos/sdk";
 import { runOnboarding } from "@aithos/protocol-client";
 
+import { CustodialTab } from "./Custodial.js";
 import { useActor } from "../actor-context.js";
 
 /**
@@ -93,7 +94,7 @@ function SignedInPanel() {
 }
 
 function SignInPanel() {
-  type Tab = "create" | "recovery" | "mandate";
+  type Tab = "create" | "recovery" | "mandate" | "custodial";
   const [tab, setTab] = useState<Tab>("create");
   return (
     <section>
@@ -108,10 +109,14 @@ function SignInPanel() {
         <button className={tab === "mandate" ? "active" : ""} onClick={() => setTab("mandate")}>
           Mandate
         </button>
+        <button className={tab === "custodial" ? "active" : ""} onClick={() => setTab("custodial")}>
+          Email &amp; password
+        </button>
       </div>
       {tab === "create" && <CreateIdentity />}
       {tab === "recovery" && <RecoveryUpload />}
       {tab === "mandate" && <MandateImport />}
+      {tab === "custodial" && <CustodialTab />}
     </section>
   );
 }

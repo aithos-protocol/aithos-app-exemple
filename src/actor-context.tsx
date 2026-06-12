@@ -215,10 +215,26 @@ const Ctx = createContext<ActorContextValue | null>(null);
 
 export function ActorProvider({ children }: { readonly children: ReactNode }) {
   const [keyStore] = useState<AithosKeyStore>(() => indexedDbKeyStore());
-  // No sessionStore: the app is JWT-agnostic. AithosAuth still accepts one,
-  // but we never read getCurrentSession(); recovery + mandate paths never
-  // create a JWT anyway.
-  const [auth] = useState(() => new AithosAuth({ keyStore }));
+  // sessionStore stays default (custodial sign-in carries a JWT session);
+  // recovery + mandate paths never create one. authBaseUrl follows the same
+  // env switch as the SDK endpoints — auth.dev.aithos.be unless
+  // VITE_AITHOS_ENV=prod. VITE_AITHOS_PUBLIC_KEY (pk_…, issued per app on
+  // builders.dev.aithos.be) identifies THIS app on the custodial endpoints —
+  // it selects the app's verify_base_url/reset_base_url for the magic-link
+  // emails; without it the backend falls back to the global app.dev URLs.
+  const [auth] = useState(
+    () =>
+      new AithosAuth({
+        keyStore,
+        ...(import.meta.env.VITE_AITHOS_ENV === "prod"
+          ? {}
+          : { authBaseUrl: "https://auth.dev.aithos.be", apiBaseUrl: DEV_SDK_ENDPOINTS.api }),
+        ...(typeof import.meta.env.VITE_AITHOS_PUBLIC_KEY === "string" &&
+        import.meta.env.VITE_AITHOS_PUBLIC_KEY
+          ? { publicKey: import.meta.env.VITE_AITHOS_PUBLIC_KEY }
+          : {}),
+      }),
+  );
   // Dev by default: the whole SDK (incl. the ethos api/cdn reached through
   // protocol-client) targets the *.dev.aithos.be account. Set VITE_AITHOS_ENV=prod
   // to hit production instead.
