@@ -20,6 +20,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { AithosSDKError } from "@aithos/sdk";
+
 import { useActor } from "../actor-context.js";
 import { formatError } from "./Home.js";
 
@@ -167,10 +169,14 @@ function CustodialSignIn() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set after an auto-resend triggered by an unverified account, so the user
+  // knows a fresh magic link is on its way.
+  const [resent, setResent] = useState<string | null>(null);
 
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setResent(null);
     try {
       const r = await auth.signInCustodial({ email: email.trim(), password });
       bump();
@@ -178,7 +184,22 @@ function CustodialSignIn() {
         setError("Password must be changed — use the Forgot password tab to set a new one.");
       }
     } catch (e) {
-      setError(formatError(e));
+      // Unverified account: the magic link never landed (or expired). Auto-send
+      // a fresh one — ONE resend per sign-in attempt (not a loop), so a stuck
+      // pending account self-heals without the user hunting for a button.
+      if (e instanceof AithosSDKError && e.code === "auth_email_not_verified") {
+        try {
+          await auth.resendVerificationEmail({
+            email: email.trim(),
+            ...(APP_API_KEY ? { apiKey: APP_API_KEY } : {}),
+          });
+          setResent(email.trim());
+        } catch (re) {
+          setError(formatError(re));
+        }
+      } else {
+        setError(formatError(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -197,6 +218,12 @@ function CustodialSignIn() {
       <button onClick={submit} disabled={busy || !email.includes("@") || !password}>
         {busy ? "Signing in…" : "Sign in"}
       </button>
+      {resent && (
+        <p className="lede">
+          This account isn't verified yet — we just sent a fresh <strong>magic link</strong> to{" "}
+          <code>{resent}</code>. Click it to verify and sign in.
+        </p>
+      )}
       {error && <p className="error">{error}</p>}
     </div>
   );
