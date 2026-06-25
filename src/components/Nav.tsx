@@ -8,6 +8,7 @@
 import { NavLink } from "react-router-dom";
 
 import { useActor, type ZoneName } from "../actor-context.js";
+import { EnvToggle } from "./EnvToggle.js";
 
 const ZONES: readonly ZoneName[] = ["public", "circle", "self"];
 
@@ -53,7 +54,9 @@ export function Nav() {
         Assets
       </Item>
 
-      <span className="pill" style={{ marginLeft: "auto" }}>
+      <EnvToggle />
+
+      <span className="pill" style={{ marginLeft: 12 }}>
         {actor ? <ActorLabel /> : <em>not signed in</em>}
       </span>
       {actor && (

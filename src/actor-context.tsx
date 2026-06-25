@@ -24,7 +24,9 @@ import {
   AithosAuth,
   AithosSDK,
   indexedDbKeyStore,
+  localStorageStore,
   DEV_SDK_ENDPOINTS,
+  DEFAULT_SDK_ENDPOINTS,
   type AithosKeyStore,
   type DataClient,
   type DelegateInfo,
@@ -50,13 +52,37 @@ import { vendorLites } from "./components/DataPlayground.js";
 export const APP_DID =
   "did:aithos:z6Mkm6tHeRiM1546AJEj8G1JP7qWhqJPnPshVJL14DWAC9q7";
 
-// Follow the SAME env switch as the SDK endpoints below: dev by default, prod only
-// when VITE_AITHOS_ENV=prod (or an explicit VITE_AITHOS_PDS_URL override). Hardcoding
-// prod here sent the #data client to prod while the rest of the app ran on dev.
-const PDS_URL =
-  (typeof import.meta.env.VITE_AITHOS_PDS_URL === "string" &&
-    import.meta.env.VITE_AITHOS_PDS_URL) ||
-  (import.meta.env.VITE_AITHOS_ENV === "prod" ? "https://pds.aithos.be" : DEV_SDK_ENDPOINTS.pds);
+/* -------------------------------------------------------------------------- */
+/*  Environment (dev / prod) — runtime-switchable                             */
+/* -------------------------------------------------------------------------- */
+
+export type Env = "dev" | "prod";
+
+const ENV_STORAGE_KEY = "aithos.env";
+
+/** Initial env: a persisted choice wins; otherwise mirror the old build-time
+ * switch (`VITE_AITHOS_ENV=prod` → prod, else dev). */
+function initialEnv(): Env {
+  try {
+    const v = localStorage.getItem(ENV_STORAGE_KEY);
+    if (v === "dev" || v === "prod") return v;
+  } catch {
+    /* storage unavailable — fall through to the build default */
+  }
+  return import.meta.env.VITE_AITHOS_ENV === "prod" ? "prod" : "dev";
+}
+
+/** Per-env custodial public key (`pk_…`, env-specific). Dev uses
+ * `VITE_AITHOS_PUBLIC_KEY`; prod uses `VITE_AITHOS_PUBLIC_KEY_PROD` when set.
+ * A pk is only needed for the CUSTODIAL (email/password, invite) endpoints —
+ * recovery-file sign-in works without one, which is the cleanest test path. */
+function publicKeyFor(env: Env): string | undefined {
+  const k =
+    env === "prod"
+      ? import.meta.env.VITE_AITHOS_PUBLIC_KEY_PROD
+      : import.meta.env.VITE_AITHOS_PUBLIC_KEY;
+  return typeof k === "string" && k ? k : undefined;
+}
 
 export type ZoneName = "public" | "circle" | "self";
 export type DataAction = "read" | "write" | "admin" | "append";
@@ -195,6 +221,10 @@ interface ActorContextValue {
   readonly auth: AithosAuth;
   readonly sdk: AithosSDK;
   readonly keyStore: AithosKeyStore;
+  /** Current account environment, and the setter used by the env toggle.
+   * Switching rebuilds the SDK bundle against the other (namespaced) account. */
+  readonly env: Env;
+  readonly setEnv: (env: Env) => void;
   /** The single acting identity, or null when not signed in. */
   readonly actor: Actor | null;
   readonly capabilities: Capabilities;
@@ -214,42 +244,45 @@ interface ActorContextValue {
 const Ctx = createContext<ActorContextValue | null>(null);
 
 export function ActorProvider({ children }: { readonly children: ReactNode }) {
-  const [keyStore] = useState<AithosKeyStore>(() => indexedDbKeyStore());
-  // sessionStore stays default (custodial sign-in carries a JWT session);
-  // recovery + mandate paths never create one. authBaseUrl follows the same
-  // env switch as the SDK endpoints — auth.dev.aithos.be unless
-  // VITE_AITHOS_ENV=prod. VITE_AITHOS_PUBLIC_KEY (pk_…, issued per app on
-  // builders.dev.aithos.be) identifies THIS app on the custodial endpoints —
-  // it selects the app's verify_base_url/reset_base_url for the magic-link
-  // emails; without it the backend falls back to the global app.dev URLs.
-  const [auth] = useState(
-    () =>
-      new AithosAuth({
-        keyStore,
-        ...(import.meta.env.VITE_AITHOS_ENV === "prod"
-          ? {}
-          : { authBaseUrl: "https://auth.dev.aithos.be", apiBaseUrl: DEV_SDK_ENDPOINTS.api }),
-        ...(typeof import.meta.env.VITE_AITHOS_PUBLIC_KEY === "string" &&
-        import.meta.env.VITE_AITHOS_PUBLIC_KEY
-          ? { publicKey: import.meta.env.VITE_AITHOS_PUBLIC_KEY }
-          : {}),
-      }),
-  );
-  // Dev by default: the whole SDK (incl. the ethos api/cdn reached through
-  // protocol-client) targets the *.dev.aithos.be account. Set VITE_AITHOS_ENV=prod
-  // to hit production instead.
-  const [sdk] = useState(() =>
-    new AithosSDK({
+  // Env is the single source of truth; switching it rebuilds the whole SDK
+  // bundle (auth + sdk + keystore) against the chosen account. Persisted so a
+  // reload keeps the choice.
+  const [env, setEnvState] = useState<Env>(initialEnv);
+  const setEnv = useCallback((next: Env) => {
+    try {
+      localStorage.setItem(ENV_STORAGE_KEY, next);
+    } catch {
+      /* ignore storage errors */
+    }
+    setEnvState(next);
+  }, []);
+
+  // Rebuild auth + sdk + keystore whenever the env changes. Keystore + session
+  // are NAMESPACED PER ENV (`…-dev` / `…-prod`) so a dev account and a prod
+  // account never collide — switching env surfaces the other env's session (or
+  // none), it never mixes seeds. authBaseUrl + endpoints + pdsUrl all follow the
+  // same switch. The `pk_…` (publicKey) identifies THIS app on the CUSTODIAL
+  // endpoints and is env-specific; recovery-file sign-in needs none.
+  const { keyStore, auth, sdk, pdsUrl } = useMemo(() => {
+    const isProd = env === "prod";
+    const keyStore: AithosKeyStore = indexedDbKeyStore({ dbName: `aithos-sdk-keys-${env}` });
+    const sessionStore = localStorageStore({ key: `aithos.session.${env}` });
+    const publicKey = publicKeyFor(env);
+    const auth = new AithosAuth({
+      keyStore,
+      sessionStore,
+      ...(isProd ? {} : { authBaseUrl: "https://auth.dev.aithos.be", apiBaseUrl: DEV_SDK_ENDPOINTS.api }),
+      ...(publicKey ? { publicKey } : {}),
+    });
+    const sdk = new AithosSDK({
       auth,
       appDid: APP_DID,
-      // Bundle v0.4 opt-in: the FIRST owner publish on a v0.3 subject migrates
-      // it (one extra edition, irreversible — the platform refuses later v0.3
-      // editions). This app is the v0.4 showcase; default SDK behaviour stays
-      // v0.3-compatible for other hosts.
       ethosV04: true,
-      ...(import.meta.env.VITE_AITHOS_ENV === "prod" ? {} : { endpoints: DEV_SDK_ENDPOINTS }),
-    }),
-  );
+      ...(isProd ? {} : { endpoints: DEV_SDK_ENDPOINTS }),
+    });
+    const pdsUrl = isProd ? DEFAULT_SDK_ENDPOINTS.pds : DEV_SDK_ENDPOINTS.pds;
+    return { keyStore, auth, sdk, pdsUrl };
+  }, [env]);
 
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
@@ -261,9 +294,15 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
 
   const bump = useCallback(() => setVersion((v) => v + 1), []);
 
-  // Boot once: rehydrate persisted owner / delegates.
+  // (Re)hydrate persisted owner / delegates. Runs on mount AND whenever the env
+  // switch rebuilds `auth`/`sdk` — reset the session view first, then resume()
+  // against the new env's (namespaced) keystore.
   useEffect(() => {
     let cancelled = false;
+    setReady(false);
+    setActor(null);
+    setOwnerDataSeedHex(undefined);
+    setDelegateKeys(null);
     auth
       .resume()
       .catch(() => {
@@ -370,7 +409,7 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
       // Session-based: the owner's #data sphere seed lives in the keystore
       // (loaded by auth.resume()); the SDK derives the client from it. No raw
       // seed plumbing here anymore.
-      return auth.ownerDataClient({ pdsUrl: PDS_URL, schemas: vendorLites() });
+      return auth.ownerDataClient({ pdsUrl, schemas: vendorLites() });
     }
     if (!delegateKeys) return null;
     // Delegate path needs the mandate imported into the auth session
@@ -381,13 +420,13 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
       return auth.delegateDataClient({
         subjectDid: delegateKeys.subjectDid,
         mandateId: delegateKeys.mandateId,
-        pdsUrl: PDS_URL,
+        pdsUrl,
         schemas: vendorLites(),
       });
     } catch {
       return null;
     }
-  }, [ready, actor, auth, ownerDataSeedHex, delegateKeys]);
+  }, [ready, actor, auth, pdsUrl, ownerDataSeedHex, delegateKeys]);
 
   const getEthosClient = useCallback(async (): Promise<EthosClient> => {
     if (!actor) throw new Error("no actor signed in");
@@ -397,8 +436,8 @@ export function ActorProvider({ children }: { readonly children: ReactNode }) {
   }, [actor, sdk]);
 
   const value = useMemo<ActorContextValue>(
-    () => ({ auth, sdk, keyStore, actor, capabilities, bump, getEthosClient, dataClient }),
-    [auth, sdk, keyStore, actor, capabilities, bump, getEthosClient, dataClient],
+    () => ({ auth, sdk, keyStore, env, setEnv, actor, capabilities, bump, getEthosClient, dataClient }),
+    [auth, sdk, keyStore, env, setEnv, actor, capabilities, bump, getEthosClient, dataClient],
   );
 
   if (!ready) return <div className="boot">Loading…</div>;
