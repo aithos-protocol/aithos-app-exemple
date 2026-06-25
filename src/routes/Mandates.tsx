@@ -581,15 +581,16 @@ function CreateMandateForm({ onCreated }: { readonly onCreated: () => void }) {
                 >
                   <option value="none">no access</option>
                   {DATA_ACTIONS.map((a) => {
-                    // Only `read` yields a fully working delegate experience in
-                    // this build: the SDK's delegate data client is read-only,
-                    // and the delegate UI doesn't expose append insert yet. Grey
-                    // write/admin/append as v0.2 so we don't mislead the issuer.
-                    const disabled = a !== "read";
+                    // All data actions are MINTABLE — the SDK/protocol support
+                    // data.<col>.{read,write,admin,append}. NB: this example app's
+                    // delegate-side UI only exercises READ (its delegate data
+                    // client is read-only, no append-insert UI), so a
+                    // write/admin/append mandate is issued here but exercised
+                    // elsewhere (delie, or a script).
                     return (
-                      <option key={a} value={a} disabled={disabled}>
+                      <option key={a} value={a}>
                         {a}
-                        {a === "read" ? "" : " (v0.2 — soon)"}
+                        {a === "read" ? "" : " (mint only — no delegate UI here)"}
                       </option>
                     );
                   })}
