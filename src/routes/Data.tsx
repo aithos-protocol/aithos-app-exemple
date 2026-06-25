@@ -12,10 +12,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import type { DataClient, ReadonlyDataClient } from "@aithos/sdk";
+import {
+  createAppendDataClient,
+  type AithosSchemaLite,
+  type DataClient,
+  type ReadonlyDataClient,
+} from "@aithos/sdk";
 
 import { useActor, type Actor } from "../actor-context.js";
-import { DataPlayground } from "../components/DataPlayground.js";
+import { DataPlayground, vendorLites } from "../components/DataPlayground.js";
 import { formatError } from "./Home.js";
 
 export function DataPage() {
@@ -78,20 +83,35 @@ function DelegateDataView({
   readonly client: ReadonlyDataClient | null;
   readonly actor: Actor;
 }) {
-  const { collections, wildcard, hasWriteScope } = useMemo(() => {
+  const { collections, wildcard, hasWriteScope, appendCollections } = useMemo(() => {
     const names = new Set<string>();
+    const appendNames = new Set<string>();
     let wild = false;
     let writeish = false;
     if (actor.kind === "delegate") {
       for (const s of actor.scopes) {
-        const m = /^data\.([^.]+)\.(read|write|admin)$/.exec(s);
+        const m = /^data\.([^.]+)\.(read|write|admin|append)$/.exec(s);
         if (!m) continue;
-        if (m[2] === "write" || m[2] === "admin") writeish = true;
-        if (m[1] === "*") wild = true;
-        else names.add(m[1]!);
+        const col = m[1]!;
+        const verb = m[2]!;
+        if (verb === "write" || verb === "admin") writeish = true;
+        // Read view (the SDK's read-only client): read/write/admin decrypt.
+        if (verb !== "append") {
+          if (col === "*") wild = true;
+          else names.add(col);
+        }
+        // Append-capable: explicit append, or write/admin (insert-capable).
+        if ((verb === "append" || verb === "write" || verb === "admin") && col !== "*") {
+          appendNames.add(col);
+        }
       }
     }
-    return { collections: [...names], wildcard: wild, hasWriteScope: writeish };
+    return {
+      collections: [...names],
+      wildcard: wild,
+      hasWriteScope: writeish,
+      appendCollections: [...appendNames],
+    };
   }, [actor]);
 
   return (
@@ -113,11 +133,11 @@ function DelegateDataView({
       {hasWriteScope && (
         <p className="warn">
           Your <code>write</code>/<code>admin</code> data scope grants{" "}
-          <strong>read</strong> here (the collection is decryptable). The current
-          SDK exposes delegate data <strong>mutation only via{" "}
-          <code>append</code></strong> (insert-only, sealed to the owner) — full
-          delegate update/delete is owner-only in v0.x. That's an SDK limit, not
-          a UI one.
+          <strong>read</strong> here (the collection is decryptable) and{" "}
+          <strong>append</strong> (insert-only — see the form below). Full delegate{" "}
+          <strong>update/delete is owner-only in v0.x</strong> (an SDK limit). An
+          appended record is sealed to the OWNER, so it won&apos;t appear here —
+          switch to the owner to read it.
         </p>
       )}
 
@@ -134,6 +154,13 @@ function DelegateDataView({
         ))}
 
       {client && wildcard && <WildcardReader client={client} />}
+
+      {appendCollections.length > 0 && (
+        <DelegateAppendForm
+          subjectDid={actor.subjectDid}
+          collections={appendCollections}
+        />
+      )}
     </section>
   );
 }
@@ -256,6 +283,151 @@ function CollectionReader({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Delegate APPEND (insert-only) — createAppendDataClient                     */
+/* -------------------------------------------------------------------------- */
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/** Resolve the subject's `#data` Ed25519 pubkey from their published did.json
+ * (anonymous read). Each appended record's DEK is sealed to it, so only the
+ * OWNER can read what a delegate deposits — exactly Délie's patient → praticien
+ * path. */
+async function resolveOwnerDataPubkey(did: string, apiBase: string): Promise<string> {
+  const res = await fetch(`${apiBase}/mcp/primitives/read`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "get_identity",
+      method: "aithos.get_identity",
+      params: { did },
+    }),
+  });
+  const json = (await res.json()) as {
+    error?: { message?: string };
+    result?: { object?: { verificationMethod?: { id?: string; publicKeyMultibase?: string }[] } };
+  };
+  if (json.error) throw new Error(json.error.message ?? "DID resolution failed");
+  const vm = (json.result?.object?.verificationMethod ?? []).find(
+    (v) => typeof v.id === "string" && v.id.endsWith("#data"),
+  );
+  if (!vm?.publicKeyMultibase) {
+    throw new Error("subject has no published #data sphere (legacy account)");
+  }
+  return vm.publicKeyMultibase;
+}
+
+function DelegateAppendForm({
+  subjectDid,
+  collections,
+}: {
+  readonly subjectDid: string;
+  readonly collections: readonly string[];
+}) {
+  const { sdk, keyStore } = useActor();
+  const lites = useMemo<readonly AithosSchemaLite[]>(() => vendorLites(), []);
+  const [collection, setCollection] = useState(collections[0] ?? "");
+  const [schemaId, setSchemaId] = useState(lites[0]?.schema ?? "");
+  const [json, setJson] = useState(
+    '{\n  "title": "from a delegate",\n  "content": "appended via createAppendDataClient"\n}',
+  );
+  const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setOk(null);
+    setErr(null);
+    try {
+      const record = JSON.parse(json) as Record<string, unknown>;
+      const schema = lites.find((l) => l.schema === schemaId);
+      if (!schema) throw new Error("pick a schema");
+      const dels = await keyStore.listDelegates();
+      const d = dels.find((x) => x.subjectDid === subjectDid) ?? dels[0];
+      if (!d) throw new Error("no delegate mandate in this session");
+      const ownerDataPubkeyMultibase = await resolveOwnerDataPubkey(
+        subjectDid,
+        sdk.endpoints.api,
+      );
+      const append = createAppendDataClient({
+        pdsUrl: sdk.endpoints.pds,
+        subjectDid,
+        ownerDataPubkeyMultibase,
+        mandate: d.mandate as never,
+        delegateSeed: hexToBytes(d.delegateSeedHex),
+        granteePubkeyMultibase: d.granteePubkeyMultibase,
+        schema,
+        schemas: lites,
+      });
+      const recordId = await append.collection(collection).insert(record);
+      setOk(
+        `Appended ${recordId} — sealed to the owner. You can't read it back here; switch to the owner to see it.`,
+      );
+    } catch (e) {
+      setErr(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="section-card" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0 }}>Append a record (delegate → owner)</h3>
+      <p className="lede" style={{ marginTop: 0 }}>
+        Insert-only via <code>createAppendDataClient</code>: each record is sealed
+        to the owner&apos;s <code>#data</code> key, so the delegate can&apos;t read
+        it back. This is exactly Délie&apos;s patient-deposit path.
+      </p>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <label>
+          collection{" "}
+          <select value={collection} onChange={(e) => setCollection(e.target.value)}>
+            {collections.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          schema{" "}
+          <select value={schemaId} onChange={(e) => setSchemaId(e.target.value)}>
+            {lites.map((l) => (
+              <option key={l.schema} value={l.schema}>
+                {l.schema}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <textarea
+        value={json}
+        onChange={(e) => setJson(e.target.value)}
+        rows={5}
+        spellCheck={false}
+        style={{ width: "100%", fontFamily: "monospace", fontSize: 13, marginTop: 8 }}
+      />
+      <button
+        onClick={() => void submit()}
+        disabled={busy || !collection || !schemaId}
+        style={{ marginTop: 8 }}
+      >
+        {busy ? "Appending…" : "Append"}
+      </button>
+      {ok && <p className="lede" style={{ marginBottom: 0 }}>{ok}</p>}
+      {err && <div className="warn" style={{ marginTop: 8 }}>{err}</div>}
     </div>
   );
 }
