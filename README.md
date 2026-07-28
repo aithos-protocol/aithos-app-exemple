@@ -1,3 +1,19 @@
+> ## ⚠️ Legacy — v1 line, frozen
+>
+> This reference application is built on the **v1** SDK (`@aithos/sdk`) and is
+> no longer maintained. It is kept for reference only.
+>
+> The v2 line lives in
+> **[aithos-core](https://github.com/aithos-protocol/aithos-core)** (protocol,
+> specification, conformance vectors) and
+> **[aithos-client](https://github.com/aithos-protocol/aithos-client)** (client
+> engine). **No public v2 reference application exists yet.**
+>
+> v1 is Apache-2.0. The v2 line is under BUSL 1.1, converting to Apache 2.0 on
+> 19 July 2030.
+>
+> Website: **[aithos.world](https://aithos.world)**
+
 # aithos-app-example
 
 Reference app for `@aithos/sdk` — a single-actor, **envelope-only** demo of the
